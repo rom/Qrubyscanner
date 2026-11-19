@@ -137,24 +137,74 @@ type Catalog struct {
 	eol  map[string]string
 }
 
-// DefaultCatalog returns a fresh catalog built from the curated built-in data.
+// DefaultCatalog returns a fresh catalog built from the built-in data: the
+// advisories generated from the RubySec database, overlaid with the curated
+// entries in vulndb.go (Ruby2Shell, applications, stack components, and
+// prerequisites for selected advisories).
 func DefaultCatalog() *Catalog {
 	c := &Catalog{
-		ruby: append([]FeedEntry(nil), builtinRuby...),
+		ruby: overlay(rubysecRuby, builtinRuby),
 		cms:  map[string][]FeedEntry{},
 		pkg:  map[string][]FeedEntry{},
 		eol:  map[string]string{},
 	}
-	for k, v := range builtinCMS {
+	for k, v := range rubysecComponents {
 		c.cms[strings.ToLower(k)] = append([]FeedEntry(nil), v...)
 	}
-	for k, v := range builtinPackages {
+	for k, v := range rubysecGems {
 		c.pkg[strings.ToLower(k)] = append([]FeedEntry(nil), v...)
+	}
+	for k, v := range builtinCMS {
+		key := strings.ToLower(k)
+		switch {
+		case len(c.pkg[key]) > 0: // a gem RubySec also covers (rack, sinatra, passenger)
+			c.pkg[key] = overlay(c.pkg[key], v)
+		default:
+			c.cms[key] = overlay(c.cms[key], v)
+		}
+	}
+	for k, v := range builtinPackages {
+		key := strings.ToLower(k)
+		c.pkg[key] = overlay(c.pkg[key], v)
 	}
 	for k, v := range builtinEOL {
 		c.eol[k] = v
 	}
 	return c
+}
+
+// overlay merges curated entries onto generated ones. Where both describe the
+// same advisory, the generated version ranges win (they come from the
+// advisory database) and the curated entry contributes what the database does
+// not carry: structured prerequisites, the unknown-version flag and its note.
+// Curated entries with no generated counterpart are appended.
+func overlay(generated, curated []FeedEntry) []FeedEntry {
+	out := append([]FeedEntry(nil), generated...)
+	idx := make(map[string]int, len(out))
+	for i, e := range out {
+		idx[e.ID] = i
+	}
+	for _, e := range curated {
+		i, ok := idx[e.ID]
+		if !ok {
+			idx[e.ID] = len(out)
+			out = append(out, e)
+			continue
+		}
+		if len(e.Prereqs) > 0 {
+			out[i].Prereqs = e.Prereqs
+		}
+		if e.AlertUnknownVersion {
+			out[i].AlertUnknownVersion = true
+		}
+		if e.Note != "" && !strings.Contains(out[i].Note, e.Note) {
+			if out[i].Note != "" {
+				out[i].Note += "; "
+			}
+			out[i].Note += e.Note
+		}
+	}
+	return out
 }
 
 // Merge folds an external feed into the catalog (appending entries and

@@ -1,7 +1,11 @@
 package ruby
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"html"
 	"net/url"
 	"regexp"
 	"sort"
@@ -33,6 +37,9 @@ type Input struct {
 	// "Accept: application/json" (deep mode). Rails' PublicExceptions answers
 	// with the body {"status":404,"error":"Not Found"}.
 	JSONErrorProbe *probe.Response
+	// FormatProbe is the response to FormatProbe (deep mode): a 406 where the
+	// plain request succeeded is Rails' format negotiation.
+	FormatProbe *probe.Response
 	// AssetProbe is the response to AssetNotFoundProbe (deep mode): the
 	// Sprockets / Propshaft asset server answers a missing asset with a plain
 	// "Not found".
@@ -91,6 +98,10 @@ var (
 	reSchemaVersion   = regexp.MustCompile(`ActiveRecord::Schema\[(\d+\.\d+)\]\.define`)
 	reLoadDefaults    = regexp.MustCompile(`config\.load_defaults\s+(\d+\.\d+)`)
 	reEncryptedFile   = regexp.MustCompile(`^[A-Za-z0-9+/=]{20,}--[A-Za-z0-9+/=]{12,}--[A-Za-z0-9+/=]{20,}$`)
+	reInnerEncrypted  = regexp.MustCompile(`^[A-Za-z0-9+/=]{16,}--[A-Za-z0-9+/=]{16,}$`)
+	reCSRFMeta        = regexp.MustCompile(`<meta\s+name=["']csrf-token["']\s+content=["']([^"']{20,120})["']|<meta\s+content=["']([^"']{20,120})["']\s+name=["']csrf-token["']`)
+	reCSRFURLSafe     = regexp.MustCompile(`^[A-Za-z0-9_-]{86}$`)
+	reCSRFPadded      = regexp.MustCompile(`^[A-Za-z0-9+/]{86}==$`)
 	reUUID            = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	reLeadingVersion  = regexp.MustCompile(`^(\d+(?:\.\d+){1,3})`)
 )
@@ -347,6 +358,20 @@ func Analyze(in Input) *Detection {
 				Signal: "behavior.rails-json-error", Source: j.RequestURL, Weight: 25,
 				Detail:  "The not-found page switches to Rails' {status, error} JSON body when JSON is requested (ActionDispatch::PublicExceptions)",
 				Pattern: "Accept: application/json", Status: j.Status,
+			})
+		}
+	}
+
+	// --- Format-negotiation probe -------------------------------------------
+	if p := in.FormatProbe; p != nil && p.Err == "" {
+		a.analyzeResponse(p, p.RequestURL)
+		ctrl406 := in.Control != nil && in.Control.Status == 406
+		if p.Status == 406 && in.Root.Status == 200 && !ctrl406 {
+			a.addFw("Rails")
+			a.addEv(Evidence{
+				Signal: "behavior.rails-format-406", Source: p.RequestURL, Weight: 40,
+				Detail:  "Requesting the front page as ?format=xml yields 406 Not Acceptable while the plain request succeeds (ActionController::UnknownFormat)",
+				Pattern: FormatProbe, Status: p.Status,
 			})
 		}
 	}
@@ -955,6 +980,30 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 		}
 	}
 	a.bodyVersions(body, source)
+	// Rails masks CSRF tokens into 64 random-looking bytes: 86 URL-safe Base64
+	// characters since Rails 6.1, 88 padded characters in 4.2–6.0. Other
+	// frameworks' csrf-token meta tags hold shorter or differently shaped values.
+	if m := reCSRFMeta.FindStringSubmatch(body); m != nil {
+		tok := html.UnescapeString(m[1] + m[2])
+		var detail string
+		switch {
+		case reCSRFURLSafe.MatchString(tok):
+			detail = "86 URL-safe Base64 characters (Rails 6.1 or later)"
+			a.hint.atLeast("6.1", "CSRF token encoding")
+		case reCSRFPadded.MatchString(tok):
+			detail = "88 padded Base64 characters (Rails 4.2 – 6.0)"
+			a.hint.atLeast("4.2", "CSRF token encoding")
+			a.hint.below("6.1", "CSRF token encoding")
+		}
+		if detail != "" {
+			addEv(Evidence{
+				Signal: "body.rails-csrf-token-format", Source: source, Weight: 40,
+				Detail: "csrf-token meta value has the shape of a Rails masked token — " + detail,
+				Where:  "response body", How: "token length and alphabet", Snippet: "<meta name=\"csrf-token\" content=…>", Probe: source,
+			})
+			a.addFw("Rails")
+		}
+	}
 	if n := hamlQuoteCount(body); n > 0 {
 		addEv(Evidence{
 			Signal: "body.haml-quoting", Source: source, Weight: 20,
@@ -1037,6 +1086,25 @@ func (a *analysis) headerHeuristics(resp *probe.Response, source string, addEv f
 		a.setComp("Foreman", v, "Foreman_version header")
 	}
 
+	// Rack::ETag derives the validator from the body itself: the first 32 hex
+	// digits of its SHA-256. Recomputing it from the body
+	// we received proves the middleware, whatever a CDN did to the header form.
+	if tag := strings.Trim(strings.TrimPrefix(strings.TrimSpace(resp.HeaderGet("ETag")), "W/"), `"`); len(tag) == 32 && len(resp.Body) > 0 && int64(len(resp.Body)) < probe.DefaultMaxBodyBytes {
+		// Only the truncated SHA-256 form is used. Older Rack used the body's
+		// MD5, but so do S3, Vercel and other static hosts, so an MD5 match
+		// says nothing about Ruby.
+		sum := sha256.Sum256(resp.Body)
+		if tag == hex.EncodeToString(sum[:])[:32] {
+			addEv(Evidence{
+				Signal: "header.rack-etag-digest", Source: source, Weight: 60,
+				Detail: "The ETag equals the digest Rack::ETag computes — the first 32 hex digits of the body's SHA-256 (Rack 2.1 or later)",
+				Where:  "response header 'ETag' + response body", How: "digest recomputation",
+				Snippet: "ETag: " + resp.HeaderGet("ETag"), Probe: source,
+			})
+			a.addFw("Rack")
+		}
+	}
+
 	// Phoenix (Elixir) copied Rails' default Cache-Control and secure-browser
 	// headers, so those combinations prove nothing on a Phoenix response.
 	if looksPhoenix(resp, resp.BodyString()) {
@@ -1113,6 +1181,29 @@ func (a *analysis) cookieValueHeuristics(name, value, source string, addEv func(
 	case reCookieSigned.MatchString(value):
 		ev.Signal, ev.Weight = "cookie.rails-signed", 55
 		ev.Detail = "payload--HMAC signed cookie (Rails MessageVerifier / Rack::Session::Cookie format)"
+		// The payload is only signed, so its structure (never its content) can
+		// be read: Rails wraps signed values in a {"_rails":{…}} envelope, and
+		// Rails 4.0–5.1 encrypted cookies carry "<data>--<iv>" inside.
+		payload := value[:strings.LastIndex(value, "--")]
+		if dec, err := base64.StdEncoding.DecodeString(payload); err == nil {
+			switch inner := string(dec); {
+			case strings.HasPrefix(inner, `{"_rails":`):
+				ev.Signal, ev.Weight = "cookie.rails-envelope", 85
+				ev.Detail = "Signed cookie whose payload is Rails' {\"_rails\":{message, exp, pur}} envelope (Rails 5.2 or later)"
+				a.addFw("Rails")
+				a.hint.atLeast("5.2", "signed-cookie envelope")
+			case strings.HasPrefix(inner, "{") && (strings.Contains(inner, `"session_id"`) || strings.Contains(inner, `"_csrf_token"`)):
+				ev.Signal, ev.Weight = "cookie.rails-json-session", 80
+				ev.Detail = "Signed cookie whose payload is a JSON session with Rails' session_id / _csrf_token keys"
+				a.addFw("Rails")
+			case reInnerEncrypted.MatchString(inner):
+				ev.Signal, ev.Weight = "cookie.rails-cbc-encrypted", 70
+				ev.Detail = "Signed cookie wrapping \"<data>--<iv>\" — the AES-CBC encrypted cookie format of Rails 4.0–5.1"
+				a.addFw("Rails")
+				a.hint.atLeast("4.0", "AES-CBC encrypted cookie")
+				a.hint.below("5.2", "AES-CBC encrypted cookie")
+			}
+		}
 		ev.Pattern = reCookieSigned.String()
 		ev.Snippet = "Set-Cookie: " + name + "=<payload>--<hmac>"
 	default:

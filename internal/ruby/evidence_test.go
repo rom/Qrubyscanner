@@ -1,6 +1,8 @@
 package ruby
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"testing"
@@ -262,5 +264,94 @@ func TestAssetCandidates(t *testing.T) {
 	}
 	if AssetCandidates(nil, 2) != nil || AssetCandidates(page, 0) != nil {
 		t.Error("nil / zero guards")
+	}
+}
+
+func TestRackETagDigest(t *testing.T) {
+	body := "<html><body>hello</body></html>"
+	// sha256(body)[:32], as Rack::ETag >= 2.1 computes it.
+	r := resp(200, map[string]string{"ETag": `W/"` + sha256Prefix(body) + `"`}, body)
+	d := Analyze(Input{TargetURL: "http://h/", Root: r})
+	if !hasSignal(d, "header.rack-etag-digest") || !d.IsRuby || !hasStr(d.Frameworks, "Rack") {
+		t.Fatalf("Rack::ETag digest not recognised: %v", signals(d))
+	}
+	// A 32-hex ETag that is not the body digest proves nothing.
+	r = resp(200, map[string]string{"ETag": `"0123456789abcdef0123456789abcdef"`}, body)
+	if d := Analyze(Input{TargetURL: "http://h/", Root: r}); hasSignal(d, "header.rack-etag-digest") {
+		t.Error("unrelated ETag matched")
+	}
+}
+
+func TestCSRFTokenFormat(t *testing.T) {
+	urlsafe := strings.Repeat("aB3_-xYz", 10) + "abcdef" // 86 chars
+	d := Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, `<meta name="csrf-param" content="authenticity_token" /><meta name="csrf-token" content="`+urlsafe+`" />`)})
+	if !hasSignal(d, "body.rails-csrf-token-format") || !strings.Contains(d.RailsVersionHint, "6.1 or later") {
+		t.Fatalf("86-char token: %v hint=%q", signals(d), d.RailsVersionHint)
+	}
+	padded := strings.Repeat("aB3+/xYz", 10) + "abcdef=="
+	d = Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, `<meta name="csrf-token" content="`+padded+`" />`)})
+	if !hasSignal(d, "body.rails-csrf-token-format") || !strings.Contains(d.RailsVersionHint, "before 6.1") {
+		t.Fatalf("88-char token: %v hint=%q", signals(d), d.RailsVersionHint)
+	}
+	// Laravel's 40-character token is not a Rails masked token.
+	d = Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, `<meta name="csrf-token" content="`+strings.Repeat("a1", 20)+`">`)})
+	if d.Confidence != 0 {
+		t.Errorf("Laravel-style token matched: %v", signals(d))
+	}
+}
+
+func TestSignedCookiePayloads(t *testing.T) {
+	mac := "--0123456789abcdef0123456789abcdef01234567"
+	cases := map[string]string{
+		// {"_rails":{"message":"IjEi","exp":null,"pur":"cookie.x"}}
+		"eyJfcmFpbHMiOnsibWVzc2FnZSI6IklqRWkiLCJleHAiOm51bGwsInB1ciI6ImNvb2tpZS54In19": "cookie.rails-envelope",
+		// {"session_id":"abc","_csrf_token":"def"}
+		"eyJzZXNzaW9uX2lkIjoiYWJjIiwiX2NzcmZfdG9rZW4iOiJkZWYifQ==": "cookie.rails-json-session",
+		// c2VjcmV0ZGF0YXNlY3JldGRhdGE=--aXZpdml2aXZpdml2aXY=
+		"YzJWamNtVjBaR0YwWVhObFkzSmxkR1JoZEdFPS0tYVhacGRtbDJhWFpwZG1sMmFYWT0=": "cookie.rails-cbc-encrypted",
+	}
+	for payload, want := range cases {
+		d := Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, "", &http.Cookie{Name: "c", Value: payload + mac})})
+		if !hasSignal(d, want) {
+			t.Errorf("want %s, got %v", want, signals(d))
+		}
+		for _, e := range d.Evidence {
+			if strings.Contains(e.Data+e.Snippet, payload[:20]) {
+				t.Errorf("cookie payload copied into evidence for %s", want)
+			}
+		}
+	}
+}
+
+func TestFormatProbeAndRobots(t *testing.T) {
+	root := resp(200, nil, "<html>home</html>")
+	d := Analyze(Input{TargetURL: "http://h/", Deep: true, Root: root, FormatProbe: resp(406, nil, "")})
+	if !hasSignal(d, "behavior.rails-format-406") {
+		t.Fatalf("format probe: %v", signals(d))
+	}
+	d = Analyze(Input{TargetURL: "http://h/", Deep: true, Root: root, FormatProbe: resp(406, nil, ""), Control: resp(406, nil, "")})
+	if hasSignal(d, "behavior.rails-format-406") {
+		t.Error("a server that 406s unknown paths is no signal")
+	}
+	for body, fw := range map[string]string{
+		"User-Agent: *\nDisallow: /autocomplete/users\nDisallow: /autocomplete/projects\n":       "GitLab",
+		"User-agent: *\nDisallow: /issues/gantt\nDisallow: /issues/calendar\n":                   "Redmine",
+		"User-agent: *\nDisallow: /projects/*/repository\nDisallow: /projects/*/work_packages\n": "OpenProject",
+	} {
+		d := deep(root, map[string]*probe.Response{"http://h/robots.txt": resp(200, nil, body)})
+		if !hasStr(d.Frameworks, fw) {
+			t.Errorf("robots.txt for %s not recognised: %v", fw, d.Frameworks)
+		}
+	}
+}
+
+// Static hosts (S3, Vercel) use the body's MD5 as ETag; observed on a
+// Vercel-served site. That must not be mistaken for Rack::ETag.
+func TestMD5ETagIsNotRack(t *testing.T) {
+	body := "<html><body>static</body></html>"
+	sum := md5.Sum([]byte(body))
+	r := resp(200, map[string]string{"ETag": `"` + hex.EncodeToString(sum[:]) + `"`, "Server": "Vercel"}, body)
+	if d := Analyze(Input{TargetURL: "http://h/", Root: r}); d.Confidence != 0 {
+		t.Fatalf("MD5 ETag scored %d: %v", d.Confidence, signals(d))
 	}
 }

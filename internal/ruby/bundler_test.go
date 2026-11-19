@@ -104,8 +104,20 @@ func TestExposedLockfileDrivesCorrelation(t *testing.T) {
 	for _, g := range d.Bundler.Gems {
 		byGem[g.Name] = g
 	}
-	if len(byGem["ruby-saml"].Vulnerabilities) != 2 || len(byGem["devise"].Vulnerabilities) != 1 {
-		t.Errorf("gem-level leads: saml=%v devise=%v", byGem["ruby-saml"].Vulnerabilities, byGem["devise"].Vulnerabilities)
+	has := func(g BundlerGem, id string) bool {
+		for _, v := range g.Vulnerabilities {
+			if v.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(byGem["ruby-saml"], "CVE-2024-45409") || !has(byGem["ruby-saml"], "CVE-2025-25291") || !has(byGem["devise"], "CVE-2019-5421") {
+		t.Errorf("gem-level leads missing: saml=%d devise=%d", len(byGem["ruby-saml"].Vulnerabilities), len(byGem["devise"].Vulnerabilities))
+	}
+	// nokogiri is locked with a platform suffix ("1.13.0-x86_64-linux").
+	if !has(byGem["nokogiri"], "CVE-2022-24836") {
+		t.Errorf("nokogiri 1.13.0 should carry CVE-2022-24836: %d leads", len(byGem["nokogiri"].Vulnerabilities))
 	}
 	// Promoted components are correlated at the top level only.
 	if len(byGem["rails"].Vulnerabilities)+len(byGem["rack"].Vulnerabilities)+len(byGem["actionpack"].Vulnerabilities)+len(byGem["puma"].Vulnerabilities) != 0 {

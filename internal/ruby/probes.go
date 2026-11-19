@@ -31,6 +31,11 @@ const (
 // prefix and answers with a 404 whose body is the bare text "Not found".
 const AssetNotFoundProbe = "/assets/qrubyscanner-probe.css"
 
+// FormatProbe asks for the front page in a format an HTML-only action cannot
+// render. Rails raises ActionController::UnknownFormat and answers 406 Not
+// Acceptable; frameworks without format negotiation ignore the parameter.
+const FormatProbe = "/?format=xml"
+
 // UnknownMethodProbe is a syntactically valid but non-existent HTTP method.
 // Puma answers methods it does not know with a bare "501 Not Implemented" and
 // an empty body before the application is consulted; Rails itself (behind

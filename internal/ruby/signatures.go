@@ -402,6 +402,11 @@ var bodySigs = []bodySig{
 	bs("body.asset-js-cable", `ActionCable\.createConsumer|createConsumer\(\)|ActionCable\.INTERNAL|actioncable-v1-json`, "Rails", 50, "Action Cable client code in a JavaScript bundle"),
 	bs("body.asset-js-storage", `ActiveStorage\.(?:start|DirectUpload)|direct-upload:initialize|data-direct-upload-url`, "Rails", 50, "Active Storage client code / direct-upload attributes"),
 
+	bs("body.robots-gitlab", `# Based on details in https://gitlab\.com/gitlab-org/gitlab|(?m)^Disallow: /autocomplete/users$`, "GitLab", 60, "GitLab default robots.txt"),
+	bs("body.robots-redmine", `(?m)^Disallow: /issues/gantt\s*\n(?:.*\n){0,3}?Disallow: /issues/calendar`, "Redmine", 55, "Redmine default robots.txt"),
+	bs("body.robots-openproject", `(?m)^Disallow: /projects/\*/work_packages$`, "OpenProject", 55, "OpenProject default robots.txt"),
+	bs("body.robots-discourse", `# See https://datatracker\.ietf\.org/doc/rfc9309 for documentation on how to use the robots\.txt file`, "Discourse", 50, "Discourse default robots.txt"),
+
 	// --- Sinatra / Rack / other frameworks ---
 	bs("body.sinatra-404", `Sinatra doesn(?:&rsquo;|&#x2019;|’|')t know this ditty|<img src=["'][^"']{0,200}__sinatra__/(?:404|500)\.png`, "Sinatra", 90, "Sinatra default not-found / error page"),
 	bs("body.sinatra-bad-request", `^Invalid query parameters: `, "Sinatra", 70, "Sinatra 400 response for an unparseable query"),

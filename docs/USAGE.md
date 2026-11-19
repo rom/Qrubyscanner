@@ -127,6 +127,13 @@ The behavioural probes, each gated against the soft-404 baseline:
 | not-found path with `Accept: application/json` | Rails switches to `{"status":404,"error":"Not Found"}` | `behavior.rails-json-error` |
 | `/assets/qrubyscanner-probe.css` | the Sprockets / Propshaft asset server answers a bare `Not found` | `behavior.asset-server-not-found` |
 | `/cable` | Action Cable answers a plain GET with `Page not found` | `diag.action-cable` |
+| `/?format=xml` | Rails answers `406 Not Acceptable` for a format the action cannot render | `behavior.rails-format-406` |
+
+Some fingerprints are *recomputed* rather than matched: the ETag is compared
+with the SHA-256 digest Rack::ETag derives from the body
+(`header.rack-etag-digest`), and signed cookies are decoded far enough to
+recognise Rails' envelope formats (`cookie.rails-envelope`,
+`cookie.rails-cbc-encrypted`).
 
 Deep mode also fetches up to two same-origin JavaScript bundles the page
 references under `/assets/`, `/packs/` or `/vite/`, and looks for rails-ujs,
@@ -356,7 +363,10 @@ and `/nginx_status`). Every signal carries a confidence tier (low/medium/high).
 
 ## Vulnerability feeds
 
-Deep mode correlates versions against the built-in catalogue. Merge extra data
+Deep mode correlates versions against the built-in catalogue: about 1,500
+advisories generated from the RubySec advisory database (Ruby, Rails and its
+component gems, JRuby, and ~470 gems) plus curated entries for Ruby2Shell and
+self-hosted applications. `make vulndb` regenerates it from a fresh checkout. Merge extra data
 with `--vuln-feed FILE|URL` (repeatable); feeds override EOL dates by branch.
 Three formats are auto-detected:
 
