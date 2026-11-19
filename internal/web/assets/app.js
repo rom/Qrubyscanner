@@ -1,0 +1,1645 @@
+"use strict";
+
+// qrubyscanner web UI. All scan-derived text is inserted with textContent to
+// avoid injecting attacker-controlled response data into the DOM. The scan
+// endpoint streams NDJSON (progress events then a result line); scan history is
+// served by the backend and rendered below the current result.
+
+const $ = (id) => document.getElementById(id);
+
+const form = $("scan-form");
+const statusEl = $("status");
+const scanBtn = $("scan-btn");
+const cancelBtn = $("cancel-btn");
+const summaryEl = $("summary");
+const resultsEl = $("results");
+const rubyResultsEl = $("ruby-results");
+const failuresEl = $("failures");
+const resultTabsEl = $("result-tabs");
+const okCountEl = $("ok-count");
+const rubyCountEl = $("ruby-count");
+const failCountEl = $("fail-count");
+const scanErrorEl = $("scan-error");
+const downloadsEl = $("downloads");
+const progressEl = $("progress");
+const progressFill = $("progress-fill");
+const progressText = $("progress-text");
+const progressTime = $("progress-time");
+const progressLog = $("progress-log");
+const historyWrap = $("history-wrap");
+const historyEl = $("history");
+
+let controller = null;
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await runScan();
+});
+cancelBtn.addEventListener("click", () => {
+  if (controller) controller.abort();
+});
+
+// Bulk-load a target list from one or more local files (read client-side; the
+// file never leaves the browser). Lines are appended to the targets box with
+// '#' comments and blank lines stripped.
+const targetsFileEl = $("targets-file");
+if (targetsFileEl) {
+  targetsFileEl.addEventListener("change", async () => {
+    const files = Array.from(targetsFileEl.files || []);
+    if (!files.length) return;
+    let added = 0;
+    for (const file of files) {
+      let text = "";
+      try {
+        text = await file.text();
+      } catch (_) {
+        setStatus("Could not read " + file.name, true);
+        continue;
+      }
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#"));
+      if (!lines.length) continue;
+      const box = $("targets");
+      const existing = box.value.trim();
+      box.value = (existing ? existing + "\n" : "") + lines.join("\n");
+      added += lines.length;
+    }
+    setStatus(added ? `Loaded ${added} target(s) from file.` : "No targets found in file.");
+    targetsFileEl.value = ""; // allow re-loading the same file
+  });
+}
+const targetsClearEl = $("targets-clear");
+if (targetsClearEl) {
+  targetsClearEl.addEventListener("click", () => {
+    $("targets").value = "";
+    setStatus("");
+  });
+}
+
+// Bundler files loaded client-side and sent with the scan for inventorying.
+let bundlerFileContents = [];
+const bundlerFileEl = $("bundler-file");
+if (bundlerFileEl) {
+  const nameEl = $("bundler-file-name");
+  const clearEl = $("bundler-clear");
+  bundlerFileEl.addEventListener("change", async () => {
+    const files = Array.from(bundlerFileEl.files || []);
+    const names = [];
+    for (const file of files) {
+      try {
+        bundlerFileContents.push(await file.text());
+        names.push(file.name);
+      } catch (_) {
+        setStatus("Could not read " + file.name, true);
+      }
+    }
+    if (names.length) {
+      nameEl.textContent = " " + bundlerFileContents.length + " file(s): " + names.join(", ");
+      clearEl.classList.remove("hidden");
+    }
+    bundlerFileEl.value = "";
+  });
+  clearEl.addEventListener("click", () => {
+    bundlerFileContents = [];
+    nameEl.textContent = "";
+    clearEl.classList.add("hidden");
+  });
+}
+
+// ---------- tabs ----------
+let overviewCache = null;
+for (const tab of document.querySelectorAll(".tab")) {
+  tab.addEventListener("click", () => showView(tab.dataset.view));
+}
+
+// Results / Ruby / Failures sub-tabs inside the Scan view.
+for (const rt of document.querySelectorAll(".rtab")) {
+  rt.addEventListener("click", () => showResultTab(rt.dataset.rtab));
+}
+const sortEl = $("sort");
+if (sortEl) {
+  sortEl.addEventListener("change", () => {
+    sortMode = sortEl.value;
+    resortResults();
+  });
+}
+const failSortEl = $("fail-sort");
+if (failSortEl) {
+  failSortEl.addEventListener("change", () => {
+    failSortMode = failSortEl.value;
+    if (scanRender && !scanRender.pendingClear) renderFailures();
+  });
+}
+function showResultTab(which) {
+  for (const rt of document.querySelectorAll(".rtab")) {
+    rt.classList.toggle("active", rt.dataset.rtab === which);
+  }
+  resultsEl.classList.toggle("hidden", which !== "ok");
+  rubyResultsEl.classList.toggle("hidden", which !== "ruby");
+  failuresEl.classList.toggle("hidden", which !== "fail");
+  // The sort control is contextual: Results/Ruby use one set of orders, the
+  // Failures tab another (scan order vs grouped by failure type).
+  const rsw = $("results-sort-wrap");
+  const fsw = $("fail-sort-wrap");
+  if (rsw) rsw.classList.toggle("hidden", !(which === "ok" || which === "ruby"));
+  if (fsw) fsw.classList.toggle("hidden", which !== "fail");
+}
+
+function showView(name) {
+  for (const t of document.querySelectorAll(".tab")) {
+    t.classList.toggle("active", t.dataset.view === name);
+  }
+  for (const v of document.querySelectorAll(".view")) {
+    v.classList.toggle("hidden", v.id !== "view-" + name);
+  }
+  if (name === "compare") refreshCompareList();
+  if (name === "stats") loadOverview().then(renderStats);
+  if (name === "info") loadOverview().then(renderInfo);
+}
+
+async function loadOverview(force) {
+  if (overviewCache && !force) return overviewCache;
+  try {
+    const resp = await fetch("api/overview");
+    overviewCache = resp.ok ? await resp.json() : null;
+  } catch (_) {
+    overviewCache = null;
+  }
+  return overviewCache;
+}
+
+// Invalidate caches after a scan so stats/info/compare reflect new data.
+function invalidateOverview() { overviewCache = null; }
+
+const splitList = (s) =>
+  (s || "")
+    .split(/\r?\n|,/)
+    .map((x) => x.trim())
+    .filter((x) => x && !x.startsWith("#"));
+
+document.addEventListener("DOMContentLoaded", refreshHistory);
+document.addEventListener("DOMContentLoaded", showVersion);
+$("cmp-run") && $("cmp-run").addEventListener("click", runCompare);
+$("cmp-refresh") && $("cmp-refresh").addEventListener("click", refreshCompareList);
+$("oc-run") && $("oc-run").addEventListener("click", runOriginCompare);
+wireCompareUpload();
+$("stats-refresh") && $("stats-refresh").addEventListener("click", () => loadOverview(true).then(renderStats));
+$("info-refresh") && $("info-refresh").addEventListener("click", () => loadOverview(true).then(renderInfo));
+
+async function runScan() {
+  const targets = $("targets").value;
+  if (!targets.trim()) {
+    setStatus("Enter at least one target.", true);
+    return;
+  }
+
+  const body = {
+    targets_text: targets,
+    ports: $("ports").value.trim(),
+    mode: $("mode").value,
+    tls: $("tls").value,
+    timeout_seconds: parseInt($("timeout").value, 10) || 10,
+    concurrency: parseInt($("concurrency").value, 10) || 50,
+    follow_redirects: $("follow").checked,
+    security_txt: $("securitytxt").checked,
+    insecure: $("insecure").checked,
+    include_closed: $("includeclosed").checked,
+    resolve_dns: $("resolvedns").checked,
+    banners: $("banners").checked,
+    host_concurrency: parseInt($("hostconc").value, 10) || 0,
+    request_budget: parseInt($("reqbudget").value, 10) || 0,
+    allow: splitList($("allow").value),
+    block: splitList($("block").value),
+    resolve: splitList($("resolve").value),
+    sni: $("sni").value.trim(),
+    bundler_files: bundlerFileContents,
+  };
+
+  scanBtn.disabled = true;
+  cancelBtn.classList.remove("hidden");
+  setStatus("");
+  scanErrorEl.classList.add("hidden");
+  downloadsEl.classList.add("hidden");
+  startProgress();
+
+  // Prepare a fresh render, but do NOT wipe the existing results yet: they are
+  // cleared lazily when the first new service arrives, so a scan that fails
+  // before producing anything leaves the previous view intact.
+  beginScanRender();
+
+  let openCount = 0;
+  let rubyCount = 0;
+  let errMsg = null;
+  let result = null;
+  controller = new AbortController();
+
+  try {
+    const resp = await fetch("api/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      let data = {};
+      try { data = await resp.json(); } catch (_) { /* ignore */ }
+      throw new Error(data.error || ("HTTP " + resp.status));
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    const handle = (msg) => {
+      if (msg.type === "progress") {
+        const ev = msg.event;
+        if (ev.phase === "enumerate") {
+          logLine(ev.message);
+        } else {
+          if (ev.open) openCount++;
+          if (ev.ruby_verdict && ev.ruby_verdict !== "none") rubyCount++;
+          updateProgress(ev, openCount, rubyCount);
+          if (ev.open) {
+            let line = ev.host + ":" + ev.port + " open";
+            if (ev.ruby_verdict && ev.ruby_verdict !== "none") {
+              line += " · Ruby " + ev.ruby_verdict + (ev.version ? " " + ev.version : "");
+            }
+            logLine(line);
+          }
+        }
+      } else if (msg.type === "host") {
+        onHostMsg(msg);
+      } else if (msg.type === "service") {
+        onServiceMsg(msg.service);
+      } else if (msg.type === "result") {
+        result = msg.result;
+      } else if (msg.type === "error") {
+        errMsg = msg.error;
+      }
+    };
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (line) handle(JSON.parse(line));
+      }
+    }
+    if (buf.trim()) handle(JSON.parse(buf.trim()));
+
+    if (errMsg) throw new Error(errMsg);
+    if (!result) throw new Error("scan ended without a result");
+
+    finishScanRender(result);
+    setStatus(`Done in ${result.meta.duration_ms} ms · ${result.summary.hosts_scanned} host(s).`);
+    downloadsEl.classList.remove("hidden");
+    invalidateOverview();
+    refreshHistory();
+  } catch (err) {
+    // Never wipe results on error: show a banner and keep whatever streamed.
+    const aborted = err.name === "AbortError";
+    const msg = aborted
+      ? "Scan cancelled — results collected so far are shown below."
+      : friendlyScanError(err.message);
+    setStatus(aborted ? "Scan cancelled." : "Error: " + err.message, !aborted);
+    showScanError(msg);
+    // History/overview may have gained the partial run on the server side.
+    invalidateOverview();
+    refreshHistory();
+  } finally {
+    scanBtn.disabled = false;
+    cancelBtn.classList.add("hidden");
+    controller = null;
+    finishProgress();
+  }
+}
+
+/* ---------- progress ---------- */
+
+let scanStartMs = 0;
+let elapsedTimer = null;
+
+function startProgress() {
+  progressEl.classList.remove("hidden");
+  progressFill.style.width = "0%";
+  progressText.textContent = "Starting…";
+  progressLog.replaceChildren();
+  scanStartMs = Date.now();
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  updateTimeLine(false);
+  // Tick the elapsed time once a second so "running" advances even while the
+  // scan is grinding through closed ports with no progress events.
+  elapsedTimer = setInterval(() => updateTimeLine(false), 1000);
+}
+
+function updateProgress(ev, openCount, rubyCount) {
+  const pct = ev.total > 0 ? Math.round((ev.done / ev.total) * 100) : 0;
+  progressFill.style.width = pct + "%";
+  progressText.textContent =
+    `probed ${ev.done}/${ev.total} (${pct}%) · open ${openCount} · Ruby ${rubyCount}`;
+}
+
+// updateTimeLine shows when the scan started, how long it has run, and (once
+// finished) when it ended.
+function updateTimeLine(ended) {
+  if (!progressTime) return;
+  const started = new Date(scanStartMs);
+  const elapsed = Math.max(0, Date.now() - scanStartMs);
+  if (ended) {
+    progressTime.textContent =
+      `Started ${started.toLocaleTimeString()} · took ${fmtDuration(elapsed)} · ended ${new Date().toLocaleTimeString()}`;
+  } else {
+    progressTime.textContent =
+      `Started ${started.toLocaleTimeString()} · running ${fmtDuration(elapsed)}`;
+  }
+}
+
+function finishProgress() {
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+  // Leave the bar and its timestamps on screen (showing the finished state and
+  // end time) until the next scan resets them.
+  updateTimeLine(true);
+}
+
+// fmtDuration renders a millisecond span as a compact "1h 2m 3s" string.
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m " + (s % 60) + "s";
+  const h = Math.floor(m / 60);
+  return h + "h " + (m % 60) + "m " + (s % 60) + "s";
+}
+
+function logLine(text) {
+  if (!text) return;
+  const line = el("div", "log-line", text);
+  progressLog.appendChild(line);
+  while (progressLog.childElementCount > 200) {
+    progressLog.removeChild(progressLog.firstChild);
+  }
+  progressLog.scrollTop = progressLog.scrollHeight;
+}
+
+/* ---------- rendering ---------- */
+
+function setStatus(msg, isError) {
+  statusEl.textContent = msg;
+  statusEl.classList.toggle("error", !!isError);
+}
+
+// scanRender tracks the live render of the current scan so results stream in
+// and survive an error/timeout instead of being wiped.
+let scanRender = null;
+
+let sortMode = "scan";
+// failSortMode orders the Failures tab: "scan" (host order) or "type" (grouped
+// into i/o timeouts first, then other errors).
+let failSortMode = "scan";
+
+// RENDER_CAP bounds how many service cards each bucket draws in the live view.
+// Long scans can produce thousands of (mostly closed-port) results; drawing
+// them all makes the page hang. The full set is always available via download;
+// beyond the cap the live view shows a running "+N more" note.
+const RENDER_CAP = 1000;
+
+function beginScanRender() {
+  activeFilter = null;
+  scanRender = {
+    pendingClear: true,
+    okList: [],
+    rubyList: [],
+    failList: [],
+    hostDNS: {},
+    okGroups: new Map(),
+    failGroups: new Map(),
+    okState: { shown: 0, hidden: 0, note: null },
+    failState: { shown: 0, hidden: 0, note: null },
+    // Once the user picks a non-default sort or a summary filter, the live
+    // incremental append no longer matches the chosen view, so switch to
+    // coalesced full re-renders for the Results tab.
+    okRebuildMode: false,
+  };
+}
+
+// onHostMsg records a host's resolved DNS. It arrives before that host's
+// service results, so cards rendered afterwards pick up the A/PTR records —
+// which is how an IP target shows its resolved hostname while the scan runs.
+function onHostMsg(msg) {
+  if (!msg || !msg.host || !scanRender) return;
+  scanRender.hostDNS[msg.host] = { addresses: msg.addresses || [], ptr: msg.ptr || [] };
+}
+
+// isRubyResult marks a service classified as Ruby (any positive verdict).
+function isRubyResult(svc) {
+  return !!(svc && svc.ruby && svc.ruby.verdict && svc.ruby.verdict !== "none");
+}
+
+// sevRankJS ranks a severity string for client-side sorting (higher = worse).
+function sevRankJS(sev) {
+  switch ((sev || "").toLowerCase()) {
+    case "critical": return 4;
+    case "high": return 3;
+    case "medium": case "moderate": return 2;
+    case "low": return 1;
+    default: return 0;
+  }
+}
+
+function vulnCount(svc) {
+  return svc && svc.ruby && svc.ruby.vulnerabilities ? svc.ruby.vulnerabilities.length : 0;
+}
+
+// svcMaxSevRank is the worst vulnerability-lead severity on a service.
+function svcMaxSevRank(svc) {
+  if (!svc || !svc.ruby || !svc.ruby.vulnerabilities) return 0;
+  let max = 0;
+  for (const v of svc.ruby.vulnerabilities) {
+    const r = sevRankJS(v.severity);
+    if (r > max) max = r;
+  }
+  return max;
+}
+
+function dnsFor(svc) {
+  return (scanRender && scanRender.hostDNS[svc.host]) || null;
+}
+
+// ensureCleared wipes the pane exactly once — when the first new service (or a
+// final result) arrives — so a scan that fails before producing anything keeps
+// the previous view on screen.
+function ensureCleared() {
+  if (!scanRender || !scanRender.pendingClear) return;
+  scanRender.pendingClear = false;
+  resultsEl.replaceChildren();
+  rubyResultsEl.replaceChildren();
+  failuresEl.replaceChildren();
+  summaryEl.replaceChildren();
+  scanRender.okList = [];
+  scanRender.rubyList = [];
+  scanRender.failList = [];
+  scanRender.okGroups = new Map();
+  scanRender.failGroups = new Map();
+  scanRender.okState = { shown: 0, hidden: 0, note: null };
+  scanRender.failState = { shown: 0, hidden: 0, note: null };
+  scanRender.okRebuildMode = false;
+  resultTabsEl.classList.remove("hidden");
+  updateResultCounts();
+}
+
+// isProductive marks a service that actually answered HTTP; everything else
+// (closed/filtered ports, connect errors, timeouts, open non-HTTP) is a
+// "failure" shown on the Failures tab.
+function isProductive(svc) {
+  return !!(svc && svc.port_open && svc.http);
+}
+
+function onServiceMsg(svc) {
+  if (!svc) return;
+  ensureCleared();
+  if (isProductive(svc)) {
+    scanRender.okList.push(svc);
+    if (isRubyResult(svc)) scanRender.rubyList.push(svc);
+    liveRenderOK(svc);
+  } else {
+    scanRender.failList.push(svc);
+    liveRenderFail(svc);
+  }
+  updateResultCounts();
+}
+
+// liveRenderOK adds one productive service to the Results (and Ruby) tabs without
+// rebuilding the whole list. In the default view (scan order, no filter) it
+// appends incrementally; once the user picks a different sort or a summary
+// filter, it falls back to a coalesced full re-render (cheap because the
+// productive list is small relative to closed ports).
+function liveRenderOK(svc) {
+  if (!scanRender.okRebuildMode && sortMode === "scan" && !activeFilter) {
+    liveAppendCard(resultsEl, scanRender.okGroups, svc, scanRender.okState);
+  } else {
+    dirtyOK = true;
+  }
+  if (isRubyResult(svc)) dirtyRuby = true;
+  if (dirtyOK || dirtyRuby) scheduleRender();
+}
+
+// liveRenderFail adds a failed/closed/non-HTTP service to the Failures tab. In
+// scan order it appends incrementally; grouped "by failure type" it falls back
+// to a coalesced full re-render (bounded by the render cap).
+function liveRenderFail(svc) {
+  if (failSortMode === "scan") {
+    liveAppendCard(failuresEl, scanRender.failGroups, svc, scanRender.failState);
+  } else {
+    dirtyFail = true;
+    scheduleRender();
+  }
+}
+
+// isTimeoutFailure marks a failure whose error is an i/o timeout / deadline.
+function isTimeoutFailure(svc) {
+  return /i\/o timeout|timed out|timeout|deadline exceeded/i.test((svc && svc.error) || "");
+}
+
+// renderFailures (re)draws the Failures tab honouring failSortMode.
+function renderFailures() {
+  if (!scanRender) return;
+  const list = scanRender.failList;
+  if (failSortMode === "type") {
+    failuresEl.replaceChildren();
+    appendFailSection(failuresEl, "i/o timeout", list.filter(isTimeoutFailure));
+    appendFailSection(failuresEl, "other", list.filter((s) => !isTimeoutFailure(s)));
+  } else {
+    renderBucket(failuresEl, list, "scan");
+  }
+}
+
+// appendFailSection renders one labelled, capped group of failure cards.
+function appendFailSection(container, label, list) {
+  if (!list.length) return;
+  const wrap = el("div", "host-group");
+  wrap.appendChild(el("h3", null, `${label} (${list.length})`));
+  const body = el("div");
+  let n = 0;
+  for (const svc of list) {
+    if (n >= RENDER_CAP) break;
+    body.appendChild(renderService(svc, dnsFor(svc)));
+    n++;
+  }
+  if (list.length > RENDER_CAP) body.appendChild(bucketCapNote(list.length - RENDER_CAP));
+  wrap.appendChild(body);
+  container.appendChild(wrap);
+}
+
+// liveAppendCard appends one service card to a host-grouped container, creating
+// the host header lazily and respecting the render cap. Cards beyond the cap
+// are summarised in a running note instead of bloating the DOM.
+function liveAppendCard(container, groups, svc, state) {
+  if (state.shown >= RENDER_CAP) {
+    state.hidden++;
+    updateCapNote(container, state);
+    return;
+  }
+  let g = groups.get(svc.host);
+  if (!g) {
+    g = renderHostHeader(svc.host);
+    groups.set(svc.host, g);
+    container.appendChild(g.el);
+  }
+  g.body.appendChild(renderService(svc, dnsFor(svc)));
+  state.shown++;
+}
+
+function updateCapNote(container, state) {
+  if (!state.note) {
+    state.note = el("p", "cap-note", "");
+    container.appendChild(state.note);
+  }
+  state.note.textContent =
+    `+${state.hidden} more not shown (live view capped at ${RENDER_CAP}). ` +
+    `Download the scan for the full list.`;
+}
+
+// Coalesced re-render used when incremental append cannot be applied (a chosen
+// sort/filter). Dirty flags are batched into one animation frame so a burst of
+// streamed services triggers at most one rebuild per frame.
+let dirtyOK = false;
+let dirtyRuby = false;
+let dirtyFail = false;
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  const run = () => {
+    renderQueued = false;
+    if (!scanRender || scanRender.pendingClear) {
+      dirtyOK = dirtyRuby = dirtyFail = false;
+      return;
+    }
+    if (dirtyOK) { dirtyOK = false; renderResultsTab(); }
+    if (dirtyRuby) { dirtyRuby = false; renderBucket(rubyResultsEl, scanRender.rubyList, sortMode); }
+    if (dirtyFail) { dirtyFail = false; renderFailures(); }
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+  else setTimeout(run, 16);
+}
+
+// renderBucket (re)draws a container from its service array. "scan" order
+// groups by host in the order seen; "ruby" flattens with Ruby services (highest
+// confidence first) on top.
+function renderBucket(container, list, mode) {
+  container.replaceChildren();
+  if (mode === "ruby" || mode === "vuln") {
+    const ordered = list
+      .map((s, i) => ({ s, i }))
+      .sort((a, b) => {
+        if (mode === "vuln") {
+          // Services with the most critical vulnerability leads on top.
+          const va = svcMaxSevRank(a.s);
+          const vb = svcMaxSevRank(b.s);
+          if (va !== vb) return vb - va;
+          const na = vulnCount(a.s);
+          const nb = vulnCount(b.s);
+          if (na !== nb) return nb - na;
+          return a.i - b.i;
+        }
+        const pa = isRubyResult(a.s) ? 0 : 1;
+        const pb = isRubyResult(b.s) ? 0 : 1;
+        if (pa !== pb) return pa - pb;
+        const ca = a.s.ruby ? a.s.ruby.confidence : 0;
+        const cb = b.s.ruby ? b.s.ruby.confidence : 0;
+        if (ca !== cb) return cb - ca;
+        return a.i - b.i;
+      })
+      .map((x) => x.s);
+    let n = 0;
+    for (const svc of ordered) {
+      if (n >= RENDER_CAP) break;
+      container.appendChild(renderService(svc, dnsFor(svc)));
+      n++;
+    }
+    if (ordered.length > RENDER_CAP) container.appendChild(bucketCapNote(ordered.length - RENDER_CAP));
+    return;
+  }
+  // scan order, grouped by host
+  const groups = new Map();
+  let n = 0;
+  for (const svc of list) {
+    if (n >= RENDER_CAP) break;
+    let g = groups.get(svc.host);
+    if (!g) {
+      g = renderHostHeader(svc.host);
+      groups.set(svc.host, g);
+      container.appendChild(g.el);
+    }
+    g.body.appendChild(renderService(svc, dnsFor(svc)));
+    n++;
+  }
+  if (list.length > RENDER_CAP) container.appendChild(bucketCapNote(list.length - RENDER_CAP));
+}
+
+function bucketCapNote(hidden) {
+  return el(
+    "p",
+    "cap-note",
+    `+${hidden} more not shown (capped at ${RENDER_CAP}). Download the scan for the full list.`
+  );
+}
+
+function renderHostHeader(host) {
+  const wrap = el("div", "host-group");
+  wrap.appendChild(el("h3", null, host));
+  const body = el("div");
+  wrap.appendChild(body);
+  return { el: wrap, body };
+}
+
+function updateResultCounts() {
+  okCountEl.textContent = String(scanRender ? scanRender.okList.length : 0);
+  rubyCountEl.textContent = String(scanRender ? scanRender.rubyList.length : 0);
+  failCountEl.textContent = String(scanRender ? scanRender.failList.length : 0);
+}
+
+// resortResults re-renders the Results and Ruby tabs when the sort control
+// changes.
+function resortResults() {
+  if (!scanRender || scanRender.pendingClear) return;
+  // A non-scan sort reorders results, so incremental append can no longer be
+  // used for the rest of the stream — switch to coalesced full re-renders.
+  scanRender.okRebuildMode = true;
+  renderResultsTab();
+  renderBucket(rubyResultsEl, scanRender.rubyList, sortMode);
+}
+
+// finishScanRender runs on a successful result: it re-renders the Results tab
+// from the final result (so resolved A/PTR records show) and leaves the
+// streamed Failures tab in place.
+function finishScanRender(result) {
+  ensureCleared();
+  renderSummary(result.summary);
+  // Rebuild the Results/Ruby arrays from the final result so resolved A/PTR
+  // records are available; keep the streamed Failures tab.
+  scanRender.okList = [];
+  scanRender.rubyList = [];
+  for (const t of result.targets || []) {
+    if ((t.addresses && t.addresses.length) || (t.ptr && t.ptr.length)) {
+      scanRender.hostDNS[t.host] = { addresses: t.addresses, ptr: t.ptr };
+    }
+    for (const svc of t.services || []) {
+      if (!isProductive(svc)) continue;
+      scanRender.okList.push(svc);
+      if (isRubyResult(svc)) scanRender.rubyList.push(svc);
+    }
+  }
+  renderResultsTab();
+  renderBucket(rubyResultsEl, scanRender.rubyList, sortMode);
+  // Re-group the streamed failures if the user chose a non-scan failure order.
+  if (failSortMode !== "scan") renderFailures();
+  updateResultCounts();
+  if (scanRender.okList.length === 0 && scanRender.failList.length === 0) {
+    resultsEl.appendChild(el("p", "empty", "No open services found."));
+  }
+  if (scanRender.rubyList.length === 0) {
+    rubyResultsEl.appendChild(el("p", "empty", "No Ruby services detected."));
+  }
+}
+
+function showScanError(msg) {
+  scanErrorEl.textContent = msg;
+  scanErrorEl.classList.remove("hidden");
+  // If anything streamed, make sure the result tabs are visible.
+  if (scanRender && !scanRender.pendingClear) resultTabsEl.classList.remove("hidden");
+}
+
+function friendlyScanError(m) {
+  if (!m) return "The scan failed. Any results collected so far are shown below.";
+  if (/deadline exceeded|timeout|timed out/i.test(m)) {
+    return "The scan timed out before completing. The results collected so far are shown below.";
+  }
+  if (/context canceled|canceled/i.test(m)) {
+    return "The scan stopped early. Partial results are shown below.";
+  }
+  return "The scan failed (" + m + "). Any results collected so far are shown below.";
+}
+
+// RESULT_FILTERS maps a clickable summary tile to the predicate that keeps a
+// service on the Results tab. Tiles not listed here are plain counters.
+const RESULT_FILTERS = {
+  "HTTP": (s) => !!(s.port_open && s.http),
+  "Ruby confirmed": (s) => s.ruby && s.ruby.verdict === "confirmed",
+  "Ruby likely": (s) => s.ruby && s.ruby.verdict === "likely",
+  "Vuln leads": (s) => s.ruby && s.ruby.vulnerabilities && s.ruby.vulnerabilities.length > 0,
+  "security.txt": (s) => s.security_txt && s.security_txt.present,
+};
+let activeFilter = null;
+
+function renderSummary(s) {
+  summaryEl.replaceChildren();
+  const stats = [
+    ["Hosts", s.hosts_scanned],
+    ["Open ports", s.open_ports],
+    ["HTTP", s.http_services],
+    ["Ruby confirmed", s.ruby_confirmed],
+    ["Ruby likely", s.ruby_likely],
+    ["Vuln leads", s.vulnerabilities],
+    ["security.txt", s.security_txt],
+  ];
+  for (const [label, n] of stats) {
+    const box = el("div", "stat");
+    box.appendChild(el("div", "n", String(n)));
+    box.appendChild(el("div", "l", label));
+    if (RESULT_FILTERS[label]) {
+      box.classList.add("stat-click");
+      box.dataset.filter = label;
+      box.classList.toggle("active", activeFilter === label);
+      box.title = "Click to show only " + label + " results on the Results tab (click again to clear)";
+      box.addEventListener("click", () => toggleFilter(label));
+    }
+    summaryEl.appendChild(box);
+  }
+}
+
+// toggleFilter applies/clears a summary-tile filter on the Results tab.
+function toggleFilter(label) {
+  activeFilter = activeFilter === label ? null : label;
+  // A filtered Results tab is a full subset render, not an incremental append.
+  if (scanRender) scanRender.okRebuildMode = true;
+  for (const t of summaryEl.querySelectorAll(".stat-click")) {
+    t.classList.toggle("active", t.dataset.filter === activeFilter);
+  }
+  showResultTab("ok");
+  renderResultsTab();
+}
+
+// renderResultsTab draws the Results tab, applying the active summary filter.
+function renderResultsTab() {
+  if (!scanRender) return;
+  const pred = activeFilter ? RESULT_FILTERS[activeFilter] : null;
+  const list = pred ? scanRender.okList.filter(pred) : scanRender.okList;
+  renderBucket(resultsEl, list, sortMode);
+  if (pred) {
+    const note = el(
+      "div",
+      "filter-note",
+      `Filtered by “${activeFilter}”: ${list.length} of ${scanRender.okList.length}. Click the tile again to clear.`
+    );
+    resultsEl.insertBefore(note, resultsEl.firstChild);
+  }
+}
+
+function renderHost(t) {
+  const group = el("div", "host-group");
+  group.appendChild(el("h3", null, t.host));
+  if ((t.addresses && t.addresses.length) || (t.ptr && t.ptr.length)) {
+    const dns = el("div", "host-dns");
+    if (t.addresses && t.addresses.length) dns.textContent = "addr: " + t.addresses.join(", ");
+    if (t.ptr && t.ptr.length) dns.textContent += (dns.textContent ? " · " : "") + "ptr: " + t.ptr.join(", ");
+    group.appendChild(dns);
+  }
+  for (const svc of t.services || []) {
+    group.appendChild(renderService(svc, t));
+  }
+  return group;
+}
+
+function isIPHost(host) {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;       // IPv4
+  if (host.includes(":") && /^[0-9a-f:]+$/i.test(host)) return true; // IPv6
+  return false;
+}
+
+function renderService(svc, target) {
+  const verdict = svc.ruby ? svc.ruby.verdict : "none";
+  const card = el("div", "svc v-" + verdict);
+
+  const head = el("div", "svc-head");
+  head.appendChild(el("span", "svc-url", svc.url || (svc.host + ":" + svc.port)));
+  if (svc.ruby) {
+    const badge = el("span", "badge " + verdict, "Ruby: " + verdict + " (" + svc.ruby.confidence + ")");
+    badge.title =
+      "Verdict from a weighted confidence score (0–100): confirmed ≥70, likely ≥50, " +
+      "possible ≥25, none <25. This service scored " + svc.ruby.confidence + ".";
+    head.appendChild(badge);
+  } else if (!svc.port_open) {
+    const b = el("span", "badge none", "closed");
+    b.title = "The port was closed or filtered (no service answered).";
+    head.appendChild(b);
+  }
+  card.appendChild(head);
+
+  // Show the DNS name (and any resolved A/PTR records) at the top of the card
+  // whenever the scanned host is a hostname or DNS was resolved.
+  const dnsBits = [];
+  if (svc.host && !isIPHost(svc.host)) dnsBits.push("DNS name: " + svc.host);
+  if (target && target.addresses && target.addresses.length) dnsBits.push("A: " + target.addresses.join(", "));
+  if (target && target.ptr && target.ptr.length) dnsBits.push("PTR: " + target.ptr.join(", "));
+  if (dnsBits.length) card.appendChild(el("div", "svc-dns", dnsBits.join(" · ")));
+
+  const kv = el("dl", "kv");
+  const add = (k, v) => {
+    if (v === undefined || v === null || v === "") return;
+    kv.appendChild(el("dt", null, k));
+    kv.appendChild(el("dd", null, String(v)));
+  };
+
+  // When this endpoint was probed (skip the Go zero time of old checkpoints).
+  if (svc.checked_at && !svc.checked_at.startsWith("0001")) add("Scanned", fmtClock(svc.checked_at));
+  if (svc.discovery_limited) add("Discovery", "limited (" + svc.discovery_limited + ")");
+
+  if (!svc.port_open) {
+    add("Port", "closed/filtered");
+    if (svc.error) add("Error", svc.error);
+    card.appendChild(kv);
+    return card;
+  }
+
+  if (svc.banner) add("Banner", svc.banner);
+
+  const h = svc.http;
+  if (h) {
+    add("Status", h.status + (h.proto ? " " + h.proto : ""));
+    add("Server", h.server);
+    add("X-Powered-By", h.powered_by);
+    add("Title", h.title);
+    if (h.tls) add("TLS", h.tls.version + " (" + h.tls.cipher_suite + ")");
+    if (h.http2) add("HTTP version", "HTTP/2 (negotiated)");
+    if (h.alpn) add("ALPN", h.alpn);
+    if (h.h2c) add("h2c", "advertised (cleartext HTTP/2)");
+    if (h.final_url) add("Redirected to", h.final_url);
+  } else {
+    add("HTTP", "no response");
+    if (svc.error) add("Error", svc.error);
+  }
+
+  const ws = svc.server;
+  if (ws) {
+    if (ws.product) add("Web server", ws.product + (ws.version ? " " + ws.version : ""));
+    if (ws.os) add("Server OS hint", ws.os);
+  }
+  const px = svc.proxy;
+  if (px && px.present) {
+    kv.appendChild(el("dt", null, "Reverse proxy"));
+    kv.appendChild(el("dd", "warn", "YES — origin reply concealed"));
+    if (px.cdn && px.cdn.length) add("  CDN", px.cdn.join(", "));
+    if (px.waf && px.waf.length) add("  WAF", px.waf.join(", "));
+    if (px.load_balancers && px.load_balancers.length) add("  Load balancer", px.load_balancers.join(", "));
+    if (px.caches && px.caches.length) add("  Cache/proxy", px.caches.join(", "));
+  }
+
+  const rb = svc.ruby;
+  if (rb) {
+    if (rb.variant) add("Variant", rb.variant);
+    if (rb.app_server) add("App server (guess)", rb.app_server);
+    if (rb.version) add("Version", rb.version + (rb.version_source ? " (via " + rb.version_source + ")" : ""));
+    if (rb.version_conflict) {
+      kv.appendChild(el("dt", null, "Version conflict"));
+      const dd = el("dd", "warn", "sources disagree (possible multiple backends / cache / apps)");
+      kv.appendChild(dd);
+    }
+    if (rb.version_observations && rb.version_observations.length > 1) {
+      add("Version seen", rb.version_observations.map((o) => o.version + " (" + o.source + ")").join(", "));
+    }
+    if (rb.framework_versions) {
+      for (const fw of Object.keys(rb.framework_versions)) add(fw + " version", rb.framework_versions[fw]);
+    }
+    if (rb.favicon_hash) add("Favicon hash", rb.favicon_hash + " (mmh3)");
+    if (rb.eol_detail) {
+      kv.appendChild(el("dt", null, "Lifecycle"));
+      const dd = el("dd", null, rb.eol_detail);
+      if (rb.end_of_life) { dd.classList.add("warn"); dd.textContent = "END OF LIFE — " + rb.eol_detail; }
+      kv.appendChild(dd);
+    }
+    if (!rb.version && rb.branch) add("Ruby branch", rb.branch + ".x (patch level unknown)");
+    if (rb.rails_env) add("Environment", rb.rails_env);
+    if (rb.rails_info_exposed) {
+      kv.appendChild(el("dt", null, "Rails info"));
+      kv.appendChild(el("dd", "warn", "exposed at " + rb.rails_info_url));
+    }
+    // Structured facts observed directly on an exposed /rails/info/properties page.
+    const pi = rb.rails_info;
+    if (pi) {
+      if (pi.ruby_description) add("Ruby (observed)", pi.ruby_description);
+      if (pi.rubygems_version) add("RubyGems version", pi.rubygems_version);
+      if (pi.app_root) add("Application root", pi.app_root);
+      if (pi.database_adapter) add("Database adapter", pi.database_adapter);
+      if (pi.schema_version) add("Schema version", pi.schema_version);
+    }
+  }
+  card.appendChild(kv);
+
+  if (rb) {
+    if (rb.frameworks && rb.frameworks.length) card.appendChild(chips("Frameworks", rb.frameworks));
+    if (rb.addons && rb.addons.length) card.appendChild(chips("Addons / tools", rb.addons));
+    if (rb.gems && rb.gems.length) card.appendChild(chips("Gems / libraries", rb.gems));
+    if (rb.rails_info && rb.rails_info.middleware && rb.rails_info.middleware.length) {
+      card.appendChild(chips("Rack middleware (observed)", rb.rails_info.middleware));
+    }
+    if (rb.vulnerabilities && rb.vulnerabilities.length) card.appendChild(renderVulns(rb.vulnerabilities));
+    if (rb.bundler) card.appendChild(renderBundler(rb.bundler));
+    if (rb.evidence && rb.evidence.length) card.appendChild(renderEvidence(rb.evidence));
+  }
+
+  if (ws && ws.modules && ws.modules.length) card.appendChild(chips("Server modules", ws.modules));
+  if (px && px.present && px.note) card.appendChild(el("p", "note", px.note));
+
+  if (svc.security_txt && svc.security_txt.present) {
+    card.appendChild(renderSecurityTxt(svc.security_txt));
+  }
+
+  return card;
+}
+
+function chips(label, items) {
+  const wrap = el("div");
+  wrap.appendChild(el("div", "l", label));
+  const row = el("div", "chips");
+  for (const it of items) row.appendChild(el("span", "chip", it));
+  wrap.appendChild(row);
+  return wrap;
+}
+
+function renderVulns(vulns) {
+  const d = el("details");
+  d.open = true;
+  d.appendChild(el("summary", null, `Vulnerability leads (${vulns.length})`));
+  const ul = el("ul", "vulnlist");
+  for (const v of vulns) {
+    const li = el("li");
+    const sev = el("span", "sev " + (v.severity || "low"), (v.severity || "").toUpperCase());
+    sev.title = "Severity of this version-correlated lead (informational, not a confirmed finding).";
+    li.appendChild(sev);
+    li.appendChild(document.createTextNode(v.id + " — " + v.title));
+    if (v.applicability === "contradicted") {
+      const b = el("span", "appl appl-contradicted", "likely N/A here");
+      b.title = "A required precondition is contradicted by observed evidence — this lead likely does not apply to this service (not a safety guarantee).";
+      li.appendChild(b);
+    } else if (v.applicability === "observed") {
+      const b = el("span", "appl appl-observed", "preconditions met");
+      b.title = "The lead's preconditions were observed on this service.";
+      li.appendChild(b);
+    } else if (v.applicability === "unverified") {
+      const b = el("span", "appl appl-contradicted", "unverified — version unknown");
+      b.title = "Ruby was detected but its version was not disclosed, so this issue could be neither confirmed nor ruled out. Check `ruby -v` on the host.";
+      li.appendChild(b);
+    }
+    li.appendChild(el("div", "note", "affects " + v.affected_versions + " · " + v.match_basis));
+    if (v.prerequisites && v.prerequisites.length) {
+      for (const p of v.prerequisites) {
+        li.appendChild(el("div", "note prereq-" + p.state, "precondition (" + p.state + "): " + p.detail));
+      }
+    }
+    ul.appendChild(li);
+  }
+  d.appendChild(ul);
+  d.appendChild(el("p", "note", "Correlated from detected versions only (never by exploitation) — verify against the live service."));
+  return d;
+}
+
+function renderBundler(inv) {
+  const pkgs = inv.gems || [];
+  const d = el("details");
+  d.appendChild(el("summary", null, `Gems (${pkgs.length})`));
+  if (inv.ruby_require) d.appendChild(el("p", "note", "Gemfile requires Ruby " + inv.ruby_require));
+  if (inv.ruby_locked) d.appendChild(el("p", "note", "Gemfile.lock RUBY VERSION: " + inv.ruby_locked + " (interpreter at lock time)"));
+  if (inv.bundled_with) d.appendChild(el("p", "note", "bundled with Bundler " + inv.bundled_with));
+  const ul = el("ul", "item-list");
+  for (const p of pkgs) {
+    const li = el("li");
+    li.appendChild(document.createTextNode(p.name + " " + p.version));
+    li.appendChild(el("span", "when", p.class));
+    if (p.vulnerabilities && p.vulnerabilities.length) {
+      for (const v of p.vulnerabilities) {
+        const note = el("div", "note prereq-observed", v.id + " [" + (v.severity || "").toUpperCase() + "] — " + v.title +
+          (v.applicability === "contradicted" ? " (likely N/A here)" : ""));
+        li.appendChild(note);
+      }
+    }
+    ul.appendChild(li);
+  }
+  d.appendChild(ul);
+  d.appendChild(el("p", "note", "Dependency inventory from Bundler metadata and gem paths leaked in backtraces; advisory leads are version-correlated, not confirmed."));
+  return d;
+}
+
+function renderEvidence(evidence) {
+  const d = el("details");
+  d.appendChild(el("summary", null, `Evidence (${evidence.length})`));
+  const ul = el("ul", "evlist");
+  for (const ev of evidence) {
+    const li = el("li");
+    const w = el("span", "ev-weight", String(ev.weight));
+    w.title = "Confidence points this signal contributed to the Ruby score (0 = detected but not Ruby-indicative).";
+    li.appendChild(w);
+    if (ev.confidence) {
+      const tier = el("span", "sev " + evSev(ev.confidence), ev.confidence);
+      tier.title = "Signal-strength tier derived from its weight.";
+      li.appendChild(tier);
+    }
+    li.appendChild(document.createTextNode(" " + ev.signal + " — " + ev.detail));
+    const meta = [];
+    if (ev.where) meta.push("where: " + ev.where);
+    if (ev.how) meta.push("how: " + ev.how);
+    if (ev.probe) meta.push("probe: " + ev.probe);
+    if (ev.status) meta.push("HTTP " + ev.status);
+    if (ev.pattern) meta.push("matcher: " + ev.pattern);
+    if (ev.line) meta.push("line " + ev.line);
+    if (meta.length) li.appendChild(el("div", "ev-meta", meta.join(" · ")));
+    if (ev.snippet) li.appendChild(el("div", "ev-snippet", ev.snippet));
+    ul.appendChild(li);
+  }
+  d.appendChild(ul);
+  return d;
+}
+
+function renderSecurityTxt(st) {
+  const box = el("div", "sectxt");
+  box.appendChild(el("h4", null, "security.txt" + (st.signed ? " (PGP-signed)" : "")));
+  const kv = el("dl", "kv");
+  const add = (k, v) => {
+    if (!v || (Array.isArray(v) && !v.length)) return;
+    kv.appendChild(el("dt", null, k));
+    kv.appendChild(el("dd", null, Array.isArray(v) ? v.join(", ") : String(v)));
+  };
+  add("URL", st.url);
+  add("Contact", st.contact);
+  if (st.expires) {
+    kv.appendChild(el("dt", null, "Expires"));
+    const dd = el("dd", null, st.expires + (st.expired ? " (EXPIRED)" : ""));
+    if (st.expired) dd.classList.add("warn");
+    kv.appendChild(dd);
+  }
+  add("Policy", st.policy);
+  add("Encryption", st.encryption);
+  add("Languages", st.preferred_languages);
+  box.appendChild(kv);
+  return box;
+}
+
+/* ---------- history (server-backed) ---------- */
+
+async function refreshHistory() {
+  try {
+    const resp = await fetch("api/history");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const scans = data.scans || [];
+    renderHistory(scans.slice(1)); // newest is shown as the current result
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function renderHistory(scans) {
+  historyEl.replaceChildren();
+  if (!scans.length) {
+    historyWrap.classList.add("hidden");
+    return;
+  }
+  historyWrap.classList.remove("hidden");
+  for (const scan of scans) {
+    historyEl.appendChild(renderHistoryEntry(scan));
+  }
+}
+
+function renderHistoryEntry(scan) {
+  const d = el("details", "history-entry");
+  const s = scan.summary;
+  const when = formatTime(scan.at);
+  const label = (scan.hosts || []).slice(0, 3).join(", ") +
+    ((scan.hosts || []).length > 3 ? ` +${scan.hosts.length - 3} more` : "");
+  d.appendChild(el("summary", null,
+    `${when} · ${scan.mode} · ${s.hosts_scanned} host(s) · Ruby ${s.ruby_confirmed + s.ruby_likely} · vulns ${s.vulnerabilities}`));
+  if (label) d.appendChild(el("div", "history-targets", label));
+
+  const dl = el("div", "downloads");
+  dl.appendChild(el("span", null, "Download:"));
+  for (const fmt of ["json", "csv", "sarif", "html", "pdf"]) {
+    const a = el("a", null, fmt.toUpperCase());
+    a.href = `api/download?scan=${encodeURIComponent(scan.id)}&format=${fmt}`;
+    dl.appendChild(a);
+  }
+  d.appendChild(dl);
+
+  const body = el("div", "history-body");
+  let loaded = false;
+  d.addEventListener("toggle", async () => {
+    if (!d.open || loaded) return;
+    loaded = true;
+    try {
+      const resp = await fetch(`api/download?scan=${encodeURIComponent(scan.id)}&format=json`);
+      const result = await resp.json();
+      body.replaceChildren();
+      for (const t of result.targets || []) body.appendChild(renderHost(t));
+      if (!(result.targets || []).length) body.appendChild(el("p", "empty", "No open services found."));
+    } catch (_) {
+      body.appendChild(el("p", "error", "Could not load scan details."));
+    }
+  });
+  d.appendChild(body);
+  return d;
+}
+
+function formatTime(iso) {
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString();
+}
+
+// fmtClock renders a timestamp as a local wall-clock time (per-result label).
+function fmtClock(iso) {
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return iso;
+  return dt.toLocaleTimeString();
+}
+
+// showVersion fetches the build version and shows it in the page footer.
+async function showVersion() {
+  const elv = $("app-version");
+  if (!elv) return;
+  try {
+    const resp = await fetch("api/version");
+    if (!resp.ok) return;
+    const v = await resp.json();
+    let txt = (v.name || "qrubyscanner") + " " + (v.version || "");
+    if (v.commit && v.commit !== "none" && v.commit !== "dev") txt += " (" + v.commit + ")";
+    elv.textContent = txt.trim();
+  } catch (_) {
+    /* version is cosmetic; ignore failures */
+  }
+}
+
+/* ---------- helpers ---------- */
+
+function evSev(tier) {
+  if (tier === "high") return "high";
+  if (tier === "medium") return "medium";
+  return "low";
+}
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = text;
+  return n;
+}
+
+/* ---------- compare ---------- */
+
+let compareScans = [];
+
+async function refreshCompareList() {
+  try {
+    const resp = await fetch("api/history");
+    const data = resp.ok ? await resp.json() : { scans: [] };
+    compareScans = data.scans || [];
+  } catch (_) {
+    compareScans = [];
+  }
+  const label = (s) => `${formatTime(s.at)} · ${s.mode} · ${s.summary.hosts_scanned} host(s)`;
+  for (const [id, pick] of [["cmp-a", 1], ["cmp-b", 0]]) {
+    const sel = $(id);
+    if (!sel) continue;
+    sel.replaceChildren();
+    compareScans.forEach((s, i) => {
+      const o = el("option", null, label(s));
+      o.value = s.id;
+      if (i === pick) o.selected = true;
+      sel.appendChild(o);
+    });
+    if (!compareScans.length) {
+      const o = el("option", null, "— no scans yet —");
+      o.value = "";
+      sel.appendChild(o);
+    }
+  }
+}
+
+let cmpUpload = null; // text of a loaded JSON/XML scan file, used as baseline A
+
+function wireCompareUpload() {
+  const fileEl = $("cmp-file");
+  const nameEl = $("cmp-file-name");
+  const clearEl = $("cmp-file-clear");
+  if (!fileEl) return;
+  fileEl.addEventListener("change", async () => {
+    const f = (fileEl.files || [])[0];
+    if (!f) return;
+    try {
+      cmpUpload = await f.text();
+      nameEl.textContent = " " + f.name;
+      clearEl.classList.remove("hidden");
+      $("cmp-a").disabled = true;
+    } catch (_) {
+      cmpUpload = null;
+      nameEl.textContent = " (could not read file)";
+    }
+    fileEl.value = "";
+  });
+  clearEl.addEventListener("click", () => {
+    cmpUpload = null;
+    nameEl.textContent = "";
+    clearEl.classList.add("hidden");
+    $("cmp-a").disabled = false;
+  });
+}
+
+async function runCompare() {
+  const b = $("cmp-b").value;
+  const out = $("cmp-result");
+  out.replaceChildren();
+  if (!b) {
+    out.appendChild(el("p", "empty", "Run or load at least one scan to compare against."));
+    return;
+  }
+  try {
+    let data;
+    if (cmpUpload) {
+      // Baseline A is an uploaded saved scan (JSON or XML).
+      const resp = await fetch(`api/diff-upload?b=${encodeURIComponent(b)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: cmpUpload,
+      });
+      data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+    } else {
+      const a = $("cmp-a").value;
+      if (!a) {
+        out.appendChild(el("p", "empty", "Pick a baseline scan or load a saved scan file."));
+        return;
+      }
+      const resp = await fetch(`api/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
+      data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+    }
+    renderDiff(out, data.diff);
+  } catch (err) {
+    out.appendChild(el("p", "error", "Compare failed: " + err.message));
+  }
+}
+
+async function runOriginCompare() {
+  const out = $("oc-result");
+  out.replaceChildren();
+  const target = $("oc-target").value.trim();
+  const origin = $("oc-origin").value.trim();
+  if (!target || !origin) {
+    out.appendChild(el("p", "empty", "Enter both a target and an origin address."));
+    return;
+  }
+  const btn = $("oc-run");
+  btn.disabled = true;
+  out.appendChild(el("p", "note", "Scanning edge and origin…"));
+  try {
+    const resp = await fetch("api/origin-compare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target,
+        origin,
+        ports: $("oc-ports").value.trim(),
+        insecure: $("oc-insecure").checked,
+        security_txt: true,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+    out.replaceChildren();
+    out.appendChild(el("p", "note",
+      `Edge vs origin for ${data.host} (origin ${data.origin_addr}). “Added” = present only via the origin; “Removed” = only via the edge.`));
+    renderDiff(out, data.diff);
+    invalidateOverview();
+    refreshHistory();
+  } catch (err) {
+    out.replaceChildren();
+    out.appendChild(el("p", "error", "Origin compare failed: " + err.message));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderDiff(out, diff) {
+  const notes = (diff && diff.provenance_notes) || [];
+  if (notes.length) {
+    const g = el("div", "diff-group");
+    g.appendChild(el("h4", "diff-note", "Scans differ in how they were run — results may differ for this reason:"));
+    const ul = el("ul", "item-list");
+    for (const n of notes) ul.appendChild(el("li", null, n));
+    g.appendChild(ul);
+    out.appendChild(g);
+  }
+  const notReassessed = (diff && diff.not_reassessed) || [];
+  if (!diff || (!(diff.added_services || []).length && !(diff.removed_services || []).length &&
+      !(diff.changed || []).length && !notReassessed.length)) {
+    out.appendChild(el("p", "empty",
+      notes.length ? "No per-service differences between the two scans." : "No differences between the two scans."));
+    return;
+  }
+  const list = (title, cls, urls) => {
+    if (!urls || !urls.length) return;
+    const g = el("div", "diff-group");
+    g.appendChild(el("h4", cls, `${title} (${urls.length})`));
+    const ul = el("ul", "item-list");
+    for (const u of urls) ul.appendChild(el("li", null, u));
+    g.appendChild(ul);
+    out.appendChild(g);
+  };
+  list("Added services", "diff-added", diff.added_services);
+  list("Gone services (reassessed, now closed)", "diff-removed", diff.removed_services);
+  if (notReassessed.length) {
+    const g = el("div", "diff-group");
+    g.appendChild(el("h4", "diff-note", `Not reassessed — absent findings NOT treated as resolved (${notReassessed.length})`));
+    const ul = el("ul", "item-list");
+    for (const c of notReassessed) {
+      const li = el("li", null, c.url);
+      if (c.reason) li.appendChild(el("span", "when", c.reason));
+      ul.appendChild(li);
+    }
+    g.appendChild(ul);
+    out.appendChild(g);
+  }
+  if ((diff.changed || []).length) {
+    const g = el("div", "diff-group");
+    g.appendChild(el("h4", null, `Changed (${diff.changed.length})`));
+    const ul = el("ul", "item-list");
+    for (const c of diff.changed) {
+      const li = el("li", null, c.url);
+      const bits = [];
+      if (c.coverage) bits.push("coverage: " + c.coverage);
+      if (c.verdict_change) bits.push("verdict " + c.verdict_change);
+      if (c.version_change) bits.push("version " + c.version_change);
+      if ((c.new_vulns || []).length) bits.push("+vulns " + c.new_vulns.join(", "));
+      if ((c.resolved_vulns || []).length) bits.push("-vulns " + c.resolved_vulns.join(", "));
+      if ((c.unconfirmed_vulns || []).length) bits.push("not reassessed " + c.unconfirmed_vulns.join(", "));
+      if (bits.length) li.appendChild(el("span", "when", bits.join(" · ")));
+      ul.appendChild(li);
+    }
+    g.appendChild(ul);
+    out.appendChild(g);
+  }
+}
+
+/* ---------- statistics ---------- */
+
+function renderStats(ov) {
+  const body = $("stats-body");
+  body.replaceChildren();
+  if (!ov || ov.stats.scans === 0) {
+    body.appendChild(el("p", "empty", "No scans yet — run a scan first."));
+    return;
+  }
+  const s = ov.stats;
+  const tiles = el("div", "summary");
+  const tile = (label, val) => {
+    const box = el("div", "stat");
+    box.appendChild(el("div", "n", String(val)));
+    box.appendChild(el("div", "l", label));
+    tiles.appendChild(box);
+  };
+  tile("Scans", s.scans);
+  tile("Services", s.services);
+  tile("Ruby services", s.ruby_services);
+  tile("Highest severity", (s.highest_severity || "none").toUpperCase());
+  tile("Avg scan", s.avg_scan_ms + " ms");
+  if (s.oldest_ruby) tile("Oldest Ruby", s.oldest_ruby.version);
+  if (s.oldest_app) tile("Oldest app", s.oldest_app.name + " " + s.oldest_app.version);
+  body.appendChild(tiles);
+
+  if (s.oldest_ruby) body.appendChild(el("p", "note", `Oldest Ruby ${s.oldest_ruby.version} on ${s.oldest_ruby.host} (${s.oldest_ruby.url})`));
+  if (s.oldest_app) body.appendChild(el("p", "note", `Oldest application ${s.oldest_app.name} ${s.oldest_app.version} on ${s.oldest_app.host}`));
+
+  // Pie charts: vulnerability-lead severities and Ruby verdicts.
+  const pies = el("div", "chart-row");
+  pies.appendChild(pieChart("Vulnerability leads by severity", breakdownSlices(s.severity_breakdown, SEV_ORDER, sevColor)));
+  pies.appendChild(pieChart("Services by Ruby verdict", breakdownSlices(s.verdict_breakdown, VERDICT_ORDER, verdictColor)));
+  body.appendChild(pies);
+
+  // Ruby presence split across ports (e.g. http/80 vs https/443).
+  body.appendChild(barChart("Ruby services by port", mapToRows(s.ruby_by_port), (r) => portColor(r.key)));
+
+  // Web-server distribution (apache vs nginx vs …).
+  body.appendChild(barChart("Web servers", s.top_servers, (r) => serverColor(r.key)));
+
+  // Bar charts: toplists.
+  body.appendChild(barChart("Top vulnerabilities", s.top_vulns, (r) => sevColor(r.severity)));
+  body.appendChild(barChart("Top applications", s.top_apps, () => CHART_ACCENT));
+  body.appendChild(barChart("Top networks", s.top_networks, () => CHART_ACCENT2));
+}
+
+/* ---------- charts (dependency-free) ---------- */
+
+const CHART_ACCENT = "#7c6cff";
+const CHART_ACCENT2 = "#4fd1c5";
+const SEV_ORDER = ["critical", "high", "medium", "low", "unknown"];
+const VERDICT_ORDER = ["confirmed", "likely", "possible", "none"];
+
+function sevColor(sev) {
+  switch ((sev || "").toLowerCase()) {
+    case "critical": return "#ff5c6c";
+    case "high": return "#ff9f45";
+    case "medium": return "#ffd166";
+    case "low": return "#64748b";
+    default: return "#94a3b8";
+  }
+}
+function verdictColor(v) {
+  switch ((v || "").toLowerCase()) {
+    case "confirmed": return "#ff5c6c";
+    case "likely": return "#ff9f45";
+    case "possible": return "#ffd166";
+    default: return "#64748b";
+  }
+}
+// portColor tints a port/scheme bar by its scheme (HTTPS teal, HTTP violet).
+function portColor(key) {
+  const k = (key || "").toLowerCase();
+  if (k.startsWith("https")) return CHART_ACCENT2;
+  if (k.startsWith("http")) return CHART_ACCENT;
+  return "#94a3b8";
+}
+
+// serverColor gives each web-server family a stable, recognisable colour.
+function serverColor(key) {
+  const k = (key || "").toLowerCase();
+  if (k.includes("nginx") || k.includes("openresty") || k.includes("tengine")) return "#4fd1c5";
+  if (k.includes("apache")) return "#ff9f45";
+  if (k.includes("iis")) return "#7c9cff";
+  if (k.includes("litespeed")) return "#c58cff";
+  if (k.includes("caddy")) return "#64d2a0";
+  return CHART_ACCENT;
+}
+
+// mapToRows turns a {key:count} object into bar-chart rows sorted by count.
+function mapToRows(m) {
+  m = m || {};
+  return Object.keys(m)
+    .map((k) => ({ key: k, count: m[k] }))
+    .sort((a, b) => (b.count - a.count) || (a.key < b.key ? -1 : 1));
+}
+
+// breakdownSlices turns a {key:count} map into ordered pie slices.
+function breakdownSlices(m, order, colorFn) {
+  m = m || {};
+  const keys = Object.keys(m);
+  keys.sort((a, b) => {
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  return keys.filter((k) => m[k] > 0).map((k) => ({ label: k, value: m[k], color: colorFn(k) }));
+}
+
+function pieChart(title, slices) {
+  const wrap = el("div", "chart");
+  wrap.appendChild(el("h3", null, title));
+  const total = slices.reduce((a, s) => a + s.value, 0);
+  if (!total) {
+    wrap.appendChild(el("p", "empty", "—"));
+    return wrap;
+  }
+  let acc = 0;
+  const stops = [];
+  for (const s of slices) {
+    const start = (acc / total) * 100;
+    acc += s.value;
+    const end = (acc / total) * 100;
+    stops.push(`${s.color} ${start}% ${end}%`);
+  }
+  const row = el("div", "pie-row");
+  const pie = el("div", "pie");
+  pie.style.background = `conic-gradient(${stops.join(",")})`;
+  pie.setAttribute("role", "img");
+  pie.setAttribute("aria-label", title);
+  row.appendChild(pie);
+  const legend = el("div", "legend");
+  for (const s of slices) {
+    const item = el("div", "legend-item");
+    const sw = el("span", "swatch");
+    sw.style.background = s.color;
+    item.appendChild(sw);
+    item.appendChild(el("span", null, `${s.label} — ${s.value} (${Math.round((s.value / total) * 100)}%)`));
+    legend.appendChild(item);
+  }
+  row.appendChild(legend);
+  wrap.appendChild(row);
+  return wrap;
+}
+
+function barChart(title, rows, colorFn) {
+  const wrap = el("div", "chart");
+  wrap.appendChild(el("h3", null, title));
+  if (!rows || !rows.length) {
+    wrap.appendChild(el("p", "empty", "—"));
+    return wrap;
+  }
+  const max = Math.max.apply(null, rows.map((r) => r.count));
+  const list = el("div", "barlist");
+  for (const r of rows) {
+    const brow = el("div", "bar-row");
+    brow.appendChild(el("span", "bar-label", r.key));
+    const track = el("div", "bar-track");
+    const fill = el("div", "bar-fill");
+    fill.style.width = (max ? Math.round((r.count / max) * 100) : 0) + "%";
+    fill.style.background = colorFn ? colorFn(r) : CHART_ACCENT;
+    track.appendChild(fill);
+    brow.appendChild(track);
+    brow.appendChild(el("span", "bar-val", String(r.count)));
+    list.appendChild(brow);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+/* ---------- info / findings explorer ---------- */
+
+function renderInfo(ov) {
+  const tagsEl = $("info-tags");
+  const itemsEl = $("info-items");
+  tagsEl.replaceChildren();
+  itemsEl.replaceChildren();
+  if (!ov || ov.stats.scans === 0) {
+    tagsEl.appendChild(el("p", "empty", "No scans yet — run a scan first."));
+    return;
+  }
+
+  const showItems = (group) => {
+    itemsEl.replaceChildren();
+    for (const t of tagsEl.querySelectorAll(".tag")) t.classList.remove("active");
+    const h = el("h3", null, `${group.name} — ${group.count} item(s)`);
+    itemsEl.appendChild(h);
+    const ul = el("ul", "item-list");
+    for (const it of group.items || []) {
+      const li = el("li", null, it.host + "  " + it.url);
+      li.appendChild(el("span", "when", it.at));
+      ul.appendChild(li);
+    }
+    itemsEl.appendChild(ul);
+  };
+
+  const section = (title, groups, severityClass) => {
+    if (!groups || !groups.length) return;
+    const sec = el("div", "tag-section");
+    sec.appendChild(el("h3", null, title));
+    for (const g of groups) {
+      let cls = "tag";
+      if (severityClass && g.severity) cls += " sev-" + g.severity;
+      const chip = el("span", cls);
+      chip.appendChild(document.createTextNode(g.name));
+      chip.appendChild(el("span", "tag-count", "×" + g.count));
+      chip.addEventListener("click", () => {
+        showItems(g);
+        chip.classList.add("active");
+      });
+      sec.appendChild(chip);
+    }
+    tagsEl.appendChild(sec);
+  };
+
+  section("Frameworks / applications", ov.frameworks, false);
+  section("Addons / tools", ov.addons, false);
+  section("Vulnerabilities", ov.vulns, true);
+}

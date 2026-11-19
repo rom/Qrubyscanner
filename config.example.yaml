@@ -1,0 +1,156 @@
+# qrubyscanner example configuration
+#
+# Pass with:  qrubyscanner --config config.example.yaml
+#
+# Any value here is overridden by an explicitly-set command-line flag, and
+# positional CLI targets override the `targets` list below.
+#
+# The parser supports a small YAML subset: comments, nested maps with
+# space indentation (no tabs), scalar key/value pairs and block lists of
+# scalars. Quote values that contain special characters.
+
+# Targets to scan. Each may be a URL, IPv4/IPv6 literal, CIDR block,
+# dashed range (1.2.3.4-9 or 1.2.3.4-1.2.3.9) or per-octet wildcard (1.2.3.*).
+targets:
+  - https://example.com
+  - 10.0.0.0/28
+  - 192.168.1.1-20
+
+# Ports to check. Single, comma-separated and ranges may be mixed.
+# Leave empty to use the built-in common-web-port set.
+ports: "80,443,8080,8000-8010"
+
+# Scan depth:
+#   detect — only decide whether a service is Ruby
+#   deep   — also fingerprint version, variant, frameworks/gems and
+#            correlate known version-based vulnerabilities
+mode: detect
+
+# TLS handling: auto (infer from the port), on (force https) or off (force http).
+tls: auto
+
+# Per-connection timeout (Go duration: 10s, 500ms, 1m...).
+timeout: 10s
+
+# Maximum concurrent service probes.
+concurrency: 50
+
+# Follow HTTP redirects while gathering evidence.
+follow_redirects: true
+
+# Do not verify TLS certificates (useful for self-signed scan targets).
+insecure: false
+
+# Look up and parse /.well-known/security.txt (and the legacy /security.txt).
+security_txt: true
+
+# Include closed/filtered ports in the output (noisy for large ranges).
+include_closed: false
+
+# Maximum hosts a single target spec may expand to (0 = built-in default).
+max_hosts_per_spec: 65536
+
+# Override the HTTP User-Agent (empty = built-in default).
+user_agent: ""
+
+# Maximum response body bytes read for analysis (0 = built-in default).
+max_body_bytes: 524288
+
+# Machine-readable scan output: format is text | json | xml.
+# Leave file empty to write to stdout.
+output:
+  format: text
+  file: ""
+
+# Human-readable report: format is text | rtf | pdf.
+# rtf and pdf require a file. Leave both empty to skip the report.
+report:
+  format: ""
+  file: ""
+
+# Web GUI. When enabled, qrubyscanner serves the browser UI instead of
+# running a one-shot scan. `auth` protects it with HTTP Basic auth (user:pass).
+web:
+  enabled: false
+  listen: "127.0.0.1:8088"
+  auth: ""
+
+# --- Politeness ---------------------------------------------------------------
+# Max outbound HTTP requests per second across the whole scan (0 = unlimited).
+rate: 0
+# Max concurrent service probes per host (0 = unlimited).
+per_host_concurrency: 0
+# Max distinct hosts scanned at once (0 = no host-level cap).
+host_concurrency: 0
+# Random delay of up to this before each service probe (Go duration).
+jitter: 0s
+# Extra attempts on a transient network error.
+retries: 0
+# Cap deep-mode probes per service; optional app-discovery probes stop when
+# spent (0 = no cap). Deep probing is adaptive and honours 429/503 back-off.
+request_budget: 0
+
+# --- Enrichment ---------------------------------------------------------------
+# Add forward and reverse DNS for each host.
+resolve_dns: false
+# Grab a short service banner from open non-HTTP ports.
+banners: false
+
+# --- HTTP request shaping -----------------------------------------------------
+# Extra request headers — either a list of "Name: value" strings or a map.
+headers:
+  - "X-Scan: qrubyscanner"
+# Cookie header value, Bearer token, or Basic auth (user:pass).
+cookie: ""
+bearer: ""
+basic: ""
+# Override the Host header (virtual-host scanning).
+vhost: ""
+# Route requests via an http(s):// or socks5:// proxy.
+proxy: ""
+# Pin host:port to a fixed dial address (curl --resolve style), keeping the URL
+# host for the Host header and TLS SNI — e.g. to reach an origin behind a CDN.
+resolve:
+  # - "example.com:443:203.0.113.10"
+# Override the TLS SNI server name, independent of the Host header.
+sni: ""
+
+# --- Data / resume / targets --------------------------------------------------
+# External vulnerability feeds (native qrubyscanner, OSV or CSAF; file or URL).
+vuln_feeds:
+  - docs/vuln-feed.example.json
+# External favicon-hash → product catalogues (file or URL).
+favicon_catalogs: []
+# External detection-signature packs (file or URL): JSON documents of the
+# qrubyscanner-signature-pack/1 schema that add header/cookie/body matchers to
+# the built-in catalogues. Regexes are length-bounded and validated; weights
+# are clamped. Active packs are stamped into the scan's provenance metadata.
+signature_packs: []
+# Operator-supplied Bundler files (Gemfile / Gemfile.lock) to inventory a
+# project whose files are not web-exposed. The lockfile's RUBY VERSION is used
+# as a (declared) Ruby version, and locked gems are correlated with advisories.
+bundler_files: []
+# Allow/block lists override the target list. Each entry is an exact host/IP,
+# a CIDR block, or a "*.domain" / ".domain" suffix. When allow is non-empty,
+# only matching targets are scanned; block drops matching targets afterwards.
+allow: []
+block: []
+# Exit non-zero when a finding meets this severity: low|medium|high|critical|eol.
+fail_on: ""
+# Checkpoint file: record completed services and resume from it.
+resume: ""
+# Keep only enumerated subdomains that resolve in DNS.
+verify_subdomains: false
+# Disable "*.domain" subdomain enumeration.
+no_dns_enum: false
+# Read additional targets from a file, one per line ('-' for stdin).
+targets_file: ""
+
+# --- Audit trail --------------------------------------------------------------
+# Write a libpcap capture of every HTTP exchange (opens in Wireshark/tcpdump).
+pcap: ""
+# Write a human-readable session log explaining each detection decision.
+log: ""
+
+# Note: --format/--out/--report live under output:/report: above; --oA and
+# --diff remain command-line-only (see `qrubyscanner --help` and docs/USAGE.md).

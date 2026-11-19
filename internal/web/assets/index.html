@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>qrubyscanner</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>💎</text></svg>">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">💎</span>
+      <div>
+        <h1>qrubyscanner</h1>
+        <p class="tagline">Detect Ruby-backed services (Rails, Sinatra, Rack), collect evidence, report.</p>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" data-view="scan" role="tab" title="Configure and run a scan; browse live results">Scan</button>
+    <button type="button" class="tab" data-view="compare" role="tab" title="Diff any two saved scans (or an older scan against the latest)">Compare</button>
+    <button type="button" class="tab" data-view="stats" role="tab" title="Statistics aggregated across all retained scans">Statistics</button>
+    <button type="button" class="tab" data-view="info" role="tab" title="Browse every framework, addon and vulnerability as clickable tags">Info</button>
+  </nav>
+
+  <main>
+   <div id="view-scan" class="view layout">
+    <section class="panel form-panel" aria-label="Scan configuration">
+      <h2>New scan</h2>
+      <form id="scan-form">
+        <div class="targets-head">
+          <label for="targets">Targets</label>
+          <div class="targets-tools">
+            <label for="targets-file" class="file-btn" title="Load a target list from a file">Load from file…</label>
+            <input type="file" id="targets-file" accept=".txt,.csv,.lst,.list,text/plain" hidden multiple>
+            <button type="button" id="targets-clear" class="link-btn" title="Clear the target list">clear</button>
+          </div>
+        </div>
+        <textarea id="targets" rows="4" title="One target per line or comma-separated: a URL, IPv4/IPv6 address, CIDR block, 1.2.3.4-9 range, 1.2.3.* wildcard, or *.domain (enumerated via Certificate Transparency)" placeholder="example.com&#10;https://example.org/&#10;10.0.0.0/24&#10;192.168.1.1-20&#10;2001:db8::1"></textarea>
+        <p class="hint">One per line (or comma separated): URL, IPv4/IPv6, CIDR, 1.2.3.4-9 range, or 1.2.3.* wildcard. Loading a file appends its lines; '#' comments and blanks are skipped.</p>
+
+        <div class="grid2">
+          <div>
+            <label for="ports">Ports</label>
+            <input id="ports" type="text" title="Ports to scan: single, comma lists and ranges may be mixed (e.g. 80,443,8000-8100). Blank uses the common web-port set." placeholder="80,443,8000-8010">
+            <p class="hint">Blank = common web ports.</p>
+          </div>
+          <div>
+            <label for="concurrency">Concurrency</label>
+            <input id="concurrency" type="number" min="1" max="500" value="50" title="Maximum service probes in flight at once across the whole scan">
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <label for="mode">Depth</label>
+            <select id="mode" title="detect = decide whether a service is Ruby; deep = also fingerprint the Ruby version, frameworks, gems and app server, and correlate known vulnerabilities (including Ruby2Shell)">
+              <option value="detect">detect — is it Ruby?</option>
+              <option value="deep">deep — version, frameworks, gems, vulns</option>
+            </select>
+          </div>
+          <div>
+            <label for="tls">TLS</label>
+            <select id="tls" title="auto = infer from the port; on = force HTTPS; off = force HTTP">
+              <option value="auto">auto (infer from port)</option>
+              <option value="on">on (https)</option>
+              <option value="off">off (http)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <label for="timeout">Timeout (s)</label>
+            <input id="timeout" type="number" min="1" max="120" value="10" title="Per-connection timeout in seconds">
+          </div>
+          <div class="checks">
+            <label class="check" title="Follow HTTP redirects while collecting evidence"><input type="checkbox" id="follow" checked> Follow redirects</label>
+            <label class="check" title="Look up and parse /.well-known/security.txt (RFC 9116)"><input type="checkbox" id="securitytxt" checked> Fetch security.txt</label>
+            <label class="check" title="Do not verify TLS certificates (for self-signed scan targets)"><input type="checkbox" id="insecure"> Ignore TLS errors</label>
+            <label class="check" title="Include closed/filtered ports in the downloadable output"><input type="checkbox" id="includeclosed"> Show closed ports</label>
+            <label class="check" title="Resolve forward (A/AAAA) and reverse (PTR) DNS for each host"><input type="checkbox" id="resolvedns"> Resolve DNS (A/PTR)</label>
+            <label class="check" title="Grab a short banner from open ports that do not speak HTTP"><input type="checkbox" id="banners"> Grab service banners</label>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <label for="hostconc">Host concurrency</label>
+            <input id="hostconc" type="number" min="0" max="500" value="0" title="Maximum distinct hosts scanned at once (0 = no host-level cap)">
+          </div>
+          <div>
+            <label for="reqbudget">Request budget</label>
+            <input id="reqbudget" type="number" min="0" max="500" value="0" title="Cap deep-mode probes per service; optional app-discovery probes stop when spent (0 = no cap)">
+          </div>
+        </div>
+
+        <details class="advanced">
+          <summary>Allow / block lists (override the target list)</summary>
+          <label for="allow">Allow list</label>
+          <textarea id="allow" rows="2" placeholder="*.example.com&#10;10.0.0.0/24"></textarea>
+          <label for="block">Block list</label>
+          <textarea id="block" rows="2" placeholder="192.168.1.5&#10;.internal"></textarea>
+          <p class="hint">One pattern per line: exact host/IP, CIDR, or *.domain / .domain suffix. Allow keeps only matches; block drops matches.</p>
+        </details>
+
+        <details class="advanced">
+          <summary>Connection overrides (pin IP / Host / SNI)</summary>
+          <label for="resolve">Resolve (pin host:port → address)</label>
+          <textarea id="resolve" rows="2" title="curl --resolve style: force HOST:PORT to dial a specific address. One rule per line." placeholder="example.com:443:203.0.113.10&#10;example.com:80:203.0.113.10"></textarea>
+          <p class="hint">One rule per line, <code>host:port:address</code>. Dials the given address while keeping the URL host for Host/SNI — e.g. to reach an origin behind a CDN.</p>
+          <label for="sni">TLS SNI override</label>
+          <input id="sni" type="text" title="Override the TLS SNI server name, independent of the Host header. Leave blank to use the URL host." placeholder="example.com">
+          <p class="hint">Independent of the Host header (set via the config/CLI <code>--vhost</code>). A name that mismatches the certificate fails verification unless “Ignore TLS errors” is on.</p>
+        </details>
+
+        <details class="advanced">
+          <summary>Gemfile / Gemfile.lock (dependency inventory)</summary>
+          <label for="bundler-file" class="file-btn" title="Supply a Gemfile and/or Gemfile.lock to inventory gems and the locked Ruby version">Load Gemfile(s)…</label>
+          <input type="file" id="bundler-file" hidden multiple>
+          <button type="button" id="bundler-clear" class="link-btn hidden" title="Clear loaded Bundler files">clear</button>
+          <span id="bundler-file-name" class="hint"></span>
+          <p class="hint">Read client-side and sent with the scan. Builds a gem inventory, takes the Ruby version recorded in the lockfile, and correlates gem advisories — for projects whose Bundler files are not web-exposed.</p>
+        </details>
+
+        <div class="btn-row">
+          <button type="submit" id="scan-btn" class="primary" title="Start the scan">Scan</button>
+          <button type="button" id="cancel-btn" class="secondary hidden" title="Stop the scan — results collected so far are kept">Cancel</button>
+        </div>
+        <span id="status" class="status" role="status"></span>
+      </form>
+    </section>
+
+    <section class="panel results-panel" aria-label="Results">
+      <div class="results-head">
+        <h2>Results</h2>
+        <div id="downloads" class="downloads hidden">
+          <span>Download:</span>
+          <a href="api/download?format=json">JSON</a>
+          <a href="api/download?format=xml">XML</a>
+          <a href="api/download?format=csv">CSV</a>
+          <a href="api/download?format=sarif">SARIF</a>
+          <a href="api/download?format=text">Text</a>
+          <a href="api/download?format=html">HTML</a>
+          <a href="api/download?format=rtf">RTF</a>
+          <a href="api/download?format=pdf">PDF</a>
+        </div>
+      </div>
+      <div id="progress" class="progress hidden">
+        <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+        <div id="progress-text" class="progress-text"></div>
+        <div id="progress-time" class="progress-time" title="When the scan started, how long it has been running, and when it ended"></div>
+        <div id="progress-log" class="progress-log" aria-live="polite"></div>
+      </div>
+      <div id="summary" class="summary"></div>
+      <div id="scan-error" class="scan-error hidden" role="alert"></div>
+      <div id="result-tabs" class="result-tabs hidden">
+        <button type="button" class="rtab active" data-rtab="ok" title="Services that responded over HTTP">Results <span id="ok-count" class="rtab-count">0</span></button>
+        <button type="button" class="rtab" data-rtab="ruby" title="Only services classified as Ruby (any positive verdict)">Ruby <span id="ruby-count" class="rtab-count">0</span></button>
+        <button type="button" class="rtab" data-rtab="fail" title="Closed/filtered ports, connection errors, timeouts and open non-HTTP ports">Failures <span id="fail-count" class="rtab-count">0</span></button>
+        <span class="sort-wrap" id="results-sort-wrap">
+          <label for="sort" class="sort-label">Sort</label>
+          <select id="sort" class="sort-select" title="Order the Results and Ruby tabs: scan order, Ruby services (highest confidence first) on top, or services with the most critical vulnerability leads on top">
+            <option value="scan">Scan order</option>
+            <option value="ruby">Ruby first</option>
+            <option value="vuln">Most critical vulns first</option>
+          </select>
+        </span>
+        <span class="sort-wrap hidden" id="fail-sort-wrap">
+          <label for="fail-sort" class="sort-label">Sort</label>
+          <select id="fail-sort" class="sort-select" title="Order the Failures tab: scan order, or grouped by failure type (i/o timeouts first, then other errors)">
+            <option value="scan">Scan order</option>
+            <option value="type">By failure type (timeouts / other)</option>
+          </select>
+        </span>
+      </div>
+      <div id="results" class="resizable"></div>
+      <div id="ruby-results" class="resizable hidden"></div>
+      <div id="failures" class="resizable hidden"></div>
+
+      <div id="history-wrap" class="history-wrap hidden">
+        <h3>Previous scans</h3>
+        <div id="history"></div>
+      </div>
+    </section>
+   </div>
+
+   <div id="view-compare" class="view hidden">
+     <section class="panel">
+       <h2>Compare scans</h2>
+       <p class="hint">Load any two retained scans — or an older one against the latest — and see what changed.</p>
+       <div class="grid2">
+         <div>
+           <label for="cmp-a">Scan A (baseline / older)</label>
+           <select id="cmp-a" title="Pick a retained scan as the baseline, or load a saved JSON/XML scan file below"></select>
+           <p class="hint">
+             <label for="cmp-file" class="file-btn" title="Load a saved scan output (JSON or XML) to use as the baseline">Load saved scan (JSON/XML)…</label>
+             <input type="file" id="cmp-file" accept=".json,.xml,application/json,application/xml,text/xml" hidden>
+             <span id="cmp-file-name"></span>
+             <button type="button" id="cmp-file-clear" class="link-btn hidden" title="Use a retained scan instead">clear</button>
+           </p>
+         </div>
+         <div>
+           <label for="cmp-b">Scan B (compare / newer)</label>
+           <select id="cmp-b" title="The scan to compare the baseline against"></select>
+         </div>
+       </div>
+       <div class="btn-row">
+         <button type="button" id="cmp-run" class="primary" title="Show what changed between the two scans">Compare</button>
+         <button type="button" id="cmp-refresh" class="secondary" title="Reload the list of retained scans">Refresh list</button>
+       </div>
+       <div id="cmp-result"></div>
+
+       <div class="origin-check">
+         <h3>Origin check (edge vs origin)</h3>
+         <p class="hint">Scan a target through its public edge/CDN, then again with the connection pinned to an operator-supplied origin address (keeping the real Host and TLS SNI), and see what the origin reveals.</p>
+         <div class="grid2">
+           <div>
+             <label for="oc-target">Target (host or URL)</label>
+             <input id="oc-target" type="text" title="The public hostname or URL (e.g. example.com)" placeholder="example.com">
+           </div>
+           <div>
+             <label for="oc-origin">Origin address (IP)</label>
+             <input id="oc-origin" type="text" title="The origin server address to dial instead of the public one" placeholder="203.0.113.10">
+           </div>
+         </div>
+         <div class="grid2">
+           <div>
+             <label for="oc-ports">Ports</label>
+             <input id="oc-ports" type="text" title="Ports to compare (blank = common web ports)" placeholder="443">
+           </div>
+           <div class="checks">
+             <label class="check" title="Do not verify TLS certificates (useful when the origin presents a different cert)"><input type="checkbox" id="oc-insecure"> Ignore TLS errors</label>
+           </div>
+         </div>
+         <div class="btn-row">
+           <button type="button" id="oc-run" class="primary" title="Compare the public edge against the pinned origin">Compare origin</button>
+         </div>
+         <div id="oc-result"></div>
+       </div>
+     </section>
+   </div>
+
+   <div id="view-stats" class="view hidden">
+     <section class="panel">
+       <div class="results-head">
+         <h2>Statistics</h2>
+         <button type="button" id="stats-refresh" class="secondary">Refresh</button>
+       </div>
+       <p class="hint">Aggregated across all retained scans in this session.</p>
+       <div id="stats-body"></div>
+     </section>
+   </div>
+
+   <div id="view-info" class="view hidden">
+     <section class="panel">
+       <div class="results-head">
+         <h2>Findings explorer</h2>
+         <button type="button" id="info-refresh" class="secondary">Refresh</button>
+       </div>
+       <p class="hint">Every framework, addon/tool and vulnerability seen, as tags. Click a tag to list the scan items that carry it.</p>
+       <div id="info-tags"></div>
+       <div id="info-items"></div>
+     </section>
+   </div>
+  </main>
+
+  <footer class="footer">
+    <p>qrubyscanner — passive Ruby fingerprinting &amp; reporting. Scan only systems you are authorised to test.</p>
+    <p class="footer-version" id="app-version" title="Build version of this qrubyscanner instance"></p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
