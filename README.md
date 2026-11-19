@@ -77,6 +77,31 @@ project's lockfile, pass it with `--gemfile Gemfile.lock`. See
     cookie-attribute casing, Sinatra's default header set, web-console
     headers, Rails JSON/XML error bodies, the "Blocked host" page, Devise and
     I18n messages, Rack::Files / Rack::Attack replies.
+- **Rails conventions in ordinary pages** — form-helper output
+  (`accept-charset` + hidden Rails fields, `name="commit"`, `button_to`,
+  `new_user`/`edit_post_1` ids), `field_with_errors`, `data-method` /
+  `data-remote`, the 7.2+ default icon links, Kaminari / will_paginate / Pagy
+  markup, Paperclip / Dragonfly / Active Storage URLs, Devise links and flash
+  messages, Active Model validation messages, HTTP-auth failure bodies and
+  realm, the `redirect_to` body (including on redirect hops), view annotations.
+- **Ruby values leaking into output** — `#<User:0x…>` inspect strings,
+  hash-rocket `{:a=>1}` dumps, `nil:NilClass`, arity and syntax errors, JRuby
+  stack frames, template-engine and database-driver exception classes.
+- **More deep-mode probes** — the not-found path again with
+  `Accept: application/json` (Rails answers `{"status":404,"error":"Not
+  Found"}`), a missing `/assets/` file (the Sprockets/Propshaft server's bare
+  "Not found"), `/cable` (Action Cable's "Page not found"), the Propshaft,
+  Webpacker and Vite manifests, the default PWA manifest and service worker,
+  Sinatra's built-in error image, and up to two JavaScript bundles referenced
+  by the page (rails-ujs, Action Cable and Active Storage client code).
+- **More project files** — `Dockerfile` (which also yields the Ruby version),
+  `Procfile`, `.rubocop.yml` (Ruby branch), `.bundle/config`, `db/schema.rb`,
+  `config/application.rb`, `config/routes.rb`, `config/puma.rb`,
+  `config/credentials.yml.enc`, the generator's `README.md`.
+- **Rails version hint** — when no exact version is disclosed, a range is
+  estimated from generation-specific defaults (e.g. "7.2 or later (from
+  default icon.svg)"). It is labelled a hint and never used for vulnerability
+  correlation.
 - **Frameworks and applications**: Rails, Sinatra, Rack, Hanami, Padrino, Roda,
   Grape; GitLab, GitHub Enterprise Server, Discourse, Mastodon, Redmine,
   OpenProject, Chatwoot, diaspora\*, Spree/Solidus, Canvas LMS, Foreman,
@@ -223,11 +248,12 @@ are in [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 Deep mode issues a bounded number of plain **GET** requests per service (plus
 one `OPTIONS` and one request with a made-up method): the page itself, a
-guaranteed-404, the favicon, the Rack parameter probe (which also carries the
-`X-Request-Id` test), a few server-status paths, and — when the service plausibly
+guaranteed-404 (twice — once asking for JSON), the favicon, the Rack parameter
+probe (which also carries the `X-Request-Id` test), a missing asset, up to two
+JavaScript bundles the page references, a few server-status paths, and — when the service plausibly
 runs Ruby — a fixed list of diagnostic and project paths
-(`/rails/info/properties`, `/up`, `/404.html`, `/Gemfile.lock`,
-`/.ruby-version`, `/config/master.key`, …). Application-specific paths are
+(about 40: `/rails/info/properties`, `/up`, `/cable`, `/404.html`,
+`/Gemfile.lock`, `/.ruby-version`, `/Dockerfile`, `/config/master.key`, …). Application-specific paths are
 requested only once that application is indicated. Nothing is submitted,
 nothing is brute-forced, and no exploit or crash trigger is ever sent.
 `--request-budget` caps the optional part, and `--mode detect` reduces a scan

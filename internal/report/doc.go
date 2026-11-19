@@ -235,6 +235,9 @@ func renderRuby(d *document, det *ruby.Detection) {
 	if det.AppServer != "" {
 		d.kv("App server (guess)", det.AppServer)
 	}
+	if det.RailsVersionHint != "" {
+		d.kv("Rails version (hint)", det.RailsVersionHint)
+	}
 	if det.RailsEnv != "" {
 		d.kv("Environment", det.RailsEnv)
 	}

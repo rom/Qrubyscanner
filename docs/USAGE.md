@@ -124,6 +124,20 @@ The behavioural probes, each gated against the soft-404 baseline:
 | `/?p[]=1&p[k]=1` | Rack rejects a parameter declared as array *and* hash; Rails/Sinatra answer 400 | `behavior.rack-param-type` |
 | `X-Request-Id: qruby.scan!1-@probe_x` | Rails echoes it as `qrubyscan1-@probe_x` (only word characters, `-`, `@` kept) | `behavior.rails-request-id` |
 | `QRUBYSCAN /` | Puma answers a bare `501` with an empty body | `behavior.puma-unknown-method` |
+| not-found path with `Accept: application/json` | Rails switches to `{"status":404,"error":"Not Found"}` | `behavior.rails-json-error` |
+| `/assets/qrubyscanner-probe.css` | the Sprockets / Propshaft asset server answers a bare `Not found` | `behavior.asset-server-not-found` |
+| `/cable` | Action Cable answers a plain GET with `Page not found` | `diag.action-cable` |
+
+Deep mode also fetches up to two same-origin JavaScript bundles the page
+references under `/assets/`, `/packs/` or `/vite/`, and looks for rails-ujs,
+Action Cable and Active Storage client code in them.
+
+When Rails is detected without an exact version, `rails_version_hint` gives a
+range inferred from generation-specific defaults — for example the `/up`
+health endpoint (7.1+), the default `icon.svg` (7.2+), AES-GCM cookies (5.2+)
+or the `utf8` form field (before 6.0). It is an estimate: a customised
+application can defeat any single rule, and it is never used to correlate
+vulnerabilities.
 
 Deep discovery is **adaptive**: after the base and core responses, an
 application's probe paths (Rails dashboards, GitLab, Mastodon, Discourse,
@@ -460,7 +474,10 @@ observation is kept with its provenance (`version_observations`):
 | `/.ruby-version`, `/.tool-versions` | `3.4.13` | declared by the project |
 | `Gemfile.lock` `RUBY VERSION`, `Gemfile` `ruby "x.y.z"` | `ruby 3.1.2p20` | declared (lock time) |
 | version-manager path in a backtrace | `/.rbenv/versions/3.2.2/…` | declared |
+| `/Dockerfile` | `ARG RUBY_VERSION=3.3.6`, `FROM ruby:3.2.2` | declared |
+| `X-Ruby-Version` header, Bundler mismatch message | `Your Ruby version is 3.1.2, but …` | running process |
 | RubyGems ABI directory in a backtrace | `/bundle/ruby/3.2.0/gems/…` | **branch only** |
+| `/.rubocop.yml` | `TargetRubyVersion: 3.1` | **branch only** |
 
 When sources disagree at the major.minor level the result is flagged
 `version_conflict`. If you already hold the project's lockfile, pass it with

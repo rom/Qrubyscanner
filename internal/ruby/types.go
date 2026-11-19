@@ -137,6 +137,11 @@ type Detection struct {
 	// AppServer is a best-effort guess of the Ruby application server (e.g.
 	// "Puma", "Phusion Passenger", "WEBrick", "Unicorn", "Thin").
 	AppServer string `json:"app_server,omitempty"`
+	// RailsVersionHint is a version range for Rails inferred from generation-
+	// specific defaults (header sets, error pages, form fields, health
+	// endpoint) when no exact version was disclosed, e.g. ">= 7.2" or
+	// "5.2 – 6.1". It is an estimate, never used for vulnerability correlation.
+	RailsVersionHint string `json:"rails_version_hint,omitempty" xml:"rails_version_hint,omitempty"`
 	// RailsEnv is the Rails/Rack environment when it was observed or can be
 	// inferred from development-only pages ("development", "production", …).
 	RailsEnv string `json:"rails_env,omitempty" xml:"rails_env,omitempty"`

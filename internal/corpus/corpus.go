@@ -42,6 +42,7 @@ type Response struct {
 	Headers    map[string][]string `json:"headers,omitempty"`
 	Cookies    []Cookie            `json:"cookies,omitempty"`
 	Body       []byte              `json:"body,omitempty"`
+	HopBodies  []string            `json:"hop_bodies,omitempty"`
 	TLS        *probe.TLSInfo      `json:"tls,omitempty"`
 	Hops       int                 `json:"hops,omitempty"`
 	Err        string              `json:"error,omitempty"`
@@ -50,14 +51,16 @@ type Response struct {
 // Service is one scanned endpoint's captured detection inputs — the exact
 // responses that were fed to ruby.Analyze, keyed as that Input holds them.
 type Service struct {
-	Target      string               `json:"target"`
-	Deep        bool                 `json:"deep,omitempty"`
-	Root        *Response            `json:"root,omitempty"`
-	Extra       map[string]*Response `json:"extra,omitempty"`
-	Favicon     *Response            `json:"favicon,omitempty"`
-	ParamProbe  *Response            `json:"param_probe,omitempty"`
-	MethodProbe *Response            `json:"method_probe,omitempty"`
-	Control     *Response            `json:"control,omitempty"`
+	Target         string               `json:"target"`
+	Deep           bool                 `json:"deep,omitempty"`
+	Root           *Response            `json:"root,omitempty"`
+	Extra          map[string]*Response `json:"extra,omitempty"`
+	Favicon        *Response            `json:"favicon,omitempty"`
+	ParamProbe     *Response            `json:"param_probe,omitempty"`
+	MethodProbe    *Response            `json:"method_probe,omitempty"`
+	JSONErrorProbe *Response            `json:"json_error_probe,omitempty"`
+	AssetProbe     *Response            `json:"asset_probe,omitempty"`
+	Control        *Response            `json:"control,omitempty"`
 }
 
 // Corpus is a saved set of per-service detection inputs plus provenance.
@@ -123,6 +126,7 @@ func FromResponse(r *probe.Response) *Response {
 	if len(r.Body) > 0 {
 		out.Body = append([]byte(nil), r.Body...)
 	}
+	out.HopBodies = append([]string(nil), r.HopBodies...)
 	if len(r.Header) > 0 {
 		out.Headers = make(map[string][]string, len(r.Header))
 		for k, v := range r.Header {
@@ -156,6 +160,7 @@ func (r *Response) ToResponse() *probe.Response {
 	if len(r.Body) > 0 {
 		out.Body = append([]byte(nil), r.Body...)
 	}
+	out.HopBodies = append([]string(nil), r.HopBodies...)
 	if len(r.Headers) > 0 {
 		out.Header = make(http.Header, len(r.Headers))
 		for k, v := range r.Headers {
@@ -181,6 +186,8 @@ func (s *Service) sanitize() {
 	sanitizeResponse(s.Favicon)
 	sanitizeResponse(s.ParamProbe)
 	sanitizeResponse(s.MethodProbe)
+	sanitizeResponse(s.JSONErrorProbe)
+	sanitizeResponse(s.AssetProbe)
 	sanitizeResponse(s.Control)
 	for _, r := range s.Extra {
 		sanitizeResponse(r)

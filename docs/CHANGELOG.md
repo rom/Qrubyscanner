@@ -42,6 +42,21 @@ behaviour, and replaces the detection core with a Ruby one.
   header; and guards against the false positives that survey exposed —
   Phoenix (Elixir) look-alike headers, class names quoted in documentation,
   short asset digests, GitHub Pages hosting, marketing pages naming a product.
+- **A much larger evidence set** (about 170 body, 75 header and 45 cookie
+  signatures): Rails form/view-helper conventions, pagination and attachment
+  gems, Devise / Active Model / CanCanCan messages, HTTP-auth bodies and
+  realms, the `redirect_to` body on redirect hops, Ruby values leaking into
+  output, JRuby / TruffleRuby / mruby markers, more application servers and
+  applications, Shopify storefronts, and development tooling headers.
+- **More deep-mode probes**: JSON error format, missing-asset behaviour,
+  `/cable`, Propshaft / Webpacker / Vite manifests, default PWA files,
+  Sinatra's error image, referenced JavaScript bundles, and project files
+  (`Dockerfile`, `Procfile`, `.rubocop.yml`, `.bundle/config`,
+  `db/schema.rb`, `config/*.rb`, `credentials.yml.enc`).
+- **Rails version hint** (`rails_version_hint`) estimated from
+  generation-specific defaults when no exact version is disclosed; and new
+  Ruby-version sources (`Dockerfile`, `X-Ruby-Version`, Bundler mismatch
+  messages; branch from `.rubocop.yml`).
 - **Deep is the default scan depth**; `--mode detect` limits a scan to the
   yes/no verdict with two requests per service.
 - A GitHub Actions workflow running `make check`.

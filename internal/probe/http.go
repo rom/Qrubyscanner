@@ -41,10 +41,13 @@ type Response struct {
 	Header     http.Header    `json:"-"`
 	Cookies    []*http.Cookie `json:"-"`
 	Body       []byte         `json:"-"`
-	TLS        *TLSInfo       `json:"tls,omitempty"`
-	Hops       int            `json:"hops"`
-	Elapsed    time.Duration  `json:"-"`
-	Err        string         `json:"error,omitempty"`
+	// HopBodies holds a bounded prefix of each redirect response's body, in
+	// order. Frameworks write a characteristic body on redirects.
+	HopBodies []string      `json:"-"`
+	TLS       *TLSInfo      `json:"tls,omitempty"`
+	Hops      int           `json:"hops"`
+	Elapsed   time.Duration `json:"-"`
+	Err       string        `json:"error,omitempty"`
 }
 
 // BodyString returns the response body as a string.
@@ -495,6 +498,9 @@ func (f *Fetcher) do(ctx context.Context, method, rawURL string, extra map[strin
 		// Redirect: capture a bounded prefix for the audit trail, then move on.
 		rb, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
+		if len(rb) > 0 && len(out.HopBodies) < 5 {
+			out.HopBodies = append(out.HopBodies, string(rb))
+		}
 		f.record(req, resp, rb, "", hopStart)
 
 		next, err := resolveLocation(cur, location)
