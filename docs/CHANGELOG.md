@@ -57,6 +57,15 @@ behaviour, and replaces the detection core with a Ruby one.
   generation-specific defaults when no exact version is disclosed; and new
   Ruby-version sources (`Dockerfile`, `X-Ruby-Version`, Bundler mismatch
   messages; branch from `.rubocop.yml`).
+- **Vulnerability catalogue generated from the RubySec advisory database**:
+  about 1,500 advisories (92 for Ruby, ~150 for Rails and its component gems,
+  JRuby, ~1,200 across ~470 gems), with a generator (`scripts/gen_vulndb.py`,
+  `make vulndb`) and curated GitLab / Mastodon / GitHub Enterprise Server
+  additions. Several hand-written ranges were corrected by the generated data.
+- **Verifiable fingerprints**: Rack::ETag digest recomputation, signed-cookie
+  envelope decoding, CSRF-token shape, Rails format negotiation
+  (`/?format=xml` → 406), and default `robots.txt` files of GitLab, Redmine,
+  OpenProject and Discourse.
 - **Deep is the default scan depth**; `--mode detect` limits a scan to the
   yes/no verdict with two requests per service.
 - A GitHub Actions workflow running `make check`.

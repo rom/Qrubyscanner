@@ -1,6 +1,8 @@
 package ruby
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"testing"
@@ -381,8 +383,12 @@ func TestBacktraceLeaksBranchAndGems(t *testing.T) {
 	// devise is not promoted, so its lead lives in the inventory.
 	found := false
 	for _, g := range d.Bundler.Gems {
-		if g.Name == "devise" && g.Class == "observed" && len(g.Vulnerabilities) == 1 {
-			found = true
+		if g.Name == "devise" && g.Class == "observed" {
+			for _, v := range g.Vulnerabilities {
+				if v.ID == "CVE-2019-5421" {
+					found = true
+				}
+			}
 		}
 	}
 	if !found {
@@ -540,4 +546,9 @@ func TestFaviconCatalog(t *testing.T) {
 	if _, err := ParseFaviconCatalog([]byte(`{"schema":"nope","favicons":[]}`)); err == nil {
 		t.Error("bad schema accepted")
 	}
+}
+
+func sha256Prefix(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:32]
 }

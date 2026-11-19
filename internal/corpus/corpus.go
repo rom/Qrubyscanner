@@ -60,6 +60,7 @@ type Service struct {
 	MethodProbe    *Response            `json:"method_probe,omitempty"`
 	JSONErrorProbe *Response            `json:"json_error_probe,omitempty"`
 	AssetProbe     *Response            `json:"asset_probe,omitempty"`
+	FormatProbe    *Response            `json:"format_probe,omitempty"`
 	Control        *Response            `json:"control,omitempty"`
 }
 
@@ -188,6 +189,7 @@ func (s *Service) sanitize() {
 	sanitizeResponse(s.MethodProbe)
 	sanitizeResponse(s.JSONErrorProbe)
 	sanitizeResponse(s.AssetProbe)
+	sanitizeResponse(s.FormatProbe)
 	sanitizeResponse(s.Control)
 	for _, r := range s.Extra {
 		sanitizeResponse(r)

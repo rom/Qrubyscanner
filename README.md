@@ -98,6 +98,14 @@ project's lockfile, pass it with `--gemfile Gemfile.lock`. See
   `Procfile`, `.rubocop.yml` (Ruby branch), `.bundle/config`, `db/schema.rb`,
   `config/application.rb`, `config/routes.rb`, `config/puma.rb`,
   `config/credentials.yml.enc`, the generator's `README.md`.
+- **Verifiable fingerprints** — the ETag is recomputed from the body and
+  compared with what Rack::ETag would produce (the first 32 hex digits of the
+  body's SHA-256); signed-cookie payloads are decoded far enough to recognise
+  Rails' `{"_rails":…}` envelope or the Rails 4 AES-CBC wrapper (content is
+  never recorded); the `csrf-token` value is checked for the length and
+  alphabet of a Rails masked token; `/?format=xml` is checked for Rails'
+  406 format negotiation; default `robots.txt` files identify GitLab, Redmine,
+  OpenProject and Discourse.
 - **Rails version hint** — when no exact version is disclosed, a range is
   estimated from generation-specific defaults (e.g. "7.2 or later (from
   default icon.svg)"). It is labelled a hint and never used for vulnerability
@@ -113,12 +121,15 @@ project's lockfile, pass it with `--gemfile Gemfile.lock`. See
   Rack, Puma, Passenger and gem versions from `/rails/info/properties`,
   banners, the lockfile and gem paths leaked in backtraces; Rails environment;
   end-of-life evaluation; a Shodan-style **favicon mmh3 hash**.
-- **Vulnerability leads** (deep mode): a curated, version-correlated catalogue —
-  Ruby2Shell, ~35 Ruby-core advisories, Rails (CVE-2013-0156, CVE-2019-5418,
-  CVE-2020-8165, CVE-2022-32224, CVE-2025-24293, …), Rack, Sinatra, Passenger,
-  GitLab (CVE-2021-22205, CVE-2023-7028), Mastodon, Discourse and gems (puma,
-  webrick, sidekiq, devise, ruby-saml, …) — with four-component and patch-level
-  version ranges and resolved **prerequisites**. Extensible with external
+- **Vulnerability leads** (deep mode): about 1,500 version-correlated
+  advisories. The bulk is generated from the
+  [RubySec advisory database](https://github.com/rubysec/ruby-advisory-db):
+  92 for the Ruby interpreter, about 150 for Rails and its component gems,
+  JRuby, and about 1,200 across 470 gems (Rack, Puma, Sinatra, Nokogiri,
+  Devise, Sidekiq, ruby-saml, …). On top sit curated entries the database does
+  not carry: Ruby2Shell, GitLab, Mastodon, Discourse and GitHub Enterprise
+  Server advisories, and **prerequisites** for selected issues. Ranges support
+  four-component and patch-level versions. Extensible with external
   feeds (`--vuln-feed file|URL`) in the native schema **or OSV and CSAF 2.0**.
   Leads are informational — correlated from versions, not confirmed by
   exploitation.
@@ -290,8 +301,31 @@ mention a product are not treated as evidence.
 - Distributions backport fixes without changing the version string; a
   version-based lead on a distro-packaged Ruby should be checked against the
   vendor's advisory.
-- The built-in catalogue is curated, not exhaustive, and a few recent
-  advisories are marked *provisional*. Load current data with `--vuln-feed`.
+- The built-in catalogue is a snapshot. Refresh it with `make vulndb`, or load
+  current data at run time with `--vuln-feed`. The curated application entries
+  (GitLab, Mastodon, GitHub Enterprise Server) are written by hand and worth
+  checking against the vendor advisory.
+- A component version (say Rails 5.2.0) can match many advisories, most of
+  which need a particular feature or configuration to be exploitable. Leads
+  name the component gem they belong to; treat them as a to-check list.
+
+## Vulnerability data
+
+The built-in catalogue is generated, not hand-typed: `scripts/gen_vulndb.py`
+converts a checkout of the RubySec advisory database — which lists *patched*
+and *unaffected* versions — into explicit affected ranges, merging advisories
+filed under several Rails component gems. The snapshot revision is recorded in
+`RubySecRevision`. To refresh it:
+
+```sh
+git clone https://github.com/rubysec/ruby-advisory-db ../ruby-advisory-db
+make vulndb && make check
+```
+
+Curated entries live in `internal/ruby/vulndb.go`. Where a curated entry and a
+generated one describe the same advisory, the generated version ranges win and
+the curated entry only contributes its prerequisites and notes. Advisory data
+is credited to the RubySec contributors; see that project's licence terms.
 
 ## Development
 

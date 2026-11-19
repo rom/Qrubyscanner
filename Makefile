@@ -152,6 +152,13 @@ release:
 	@echo "release artifacts in dist/:"
 	@ls -1 dist
 
+## vulndb: regenerate the built-in advisory catalogue from a ruby-advisory-db checkout
+ADVISORY_DB ?= ../ruby-advisory-db
+.PHONY: vulndb
+vulndb:
+	python3 scripts/gen_vulndb.py $(ADVISORY_DB) > internal/ruby/vulndb_rubysec.go
+	gofmt -w internal/ruby/vulndb_rubysec.go
+
 ## clean: remove build artifacts
 .PHONY: clean
 clean:

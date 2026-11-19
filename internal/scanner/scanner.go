@@ -645,6 +645,7 @@ func scanService(ctx context.Context, fetcher *probe.Fetcher, j job, opts Option
 		in.JSONErrorProbe = fetcher.RequestWithHeaders(ctx, "GET", base+"/qrubyscanner_probe_404",
 			map[string]string{"Accept": "application/json"})
 		in.AssetProbe = get(base + ruby.AssetNotFoundProbe)
+		in.FormatProbe = get(base + ruby.FormatProbe)
 		// JavaScript bundles referenced by the page often carry framework
 		// client code (rails-ujs, Action Cable) the HTML itself does not show.
 		for _, p := range ruby.AssetCandidates(root, 2) {
@@ -711,6 +712,7 @@ func corpusService(target string, in ruby.Input) corpus.Service {
 		MethodProbe:    corpus.FromResponse(in.MethodProbe),
 		JSONErrorProbe: corpus.FromResponse(in.JSONErrorProbe),
 		AssetProbe:     corpus.FromResponse(in.AssetProbe),
+		FormatProbe:    corpus.FromResponse(in.FormatProbe),
 		Control:        corpus.FromResponse(in.Control),
 	}
 	if len(in.Extra) > 0 {
