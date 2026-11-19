@@ -1,0 +1,86 @@
+name: release
+
+# Publishes a GitHub Release with cross-compiled binaries.
+#   - push a tag "vX.Y.Z", or
+#   - run this workflow manually with the tag to create at the selected ref.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create and release, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INPUT_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve the tag
+        id: tag
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then tag="$GITHUB_REF_NAME"; else tag="$INPUT_TAG"; fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
+            echo "tag '$tag' is not of the form vX.Y.Z" >&2
+            exit 1
+          fi
+          # The tag must match the version compiled into the source.
+          want="v$(sed -n 's/^\tVersion = "\(.*\)"$/\1/p' internal/version/version.go)"
+          if [ "$tag" != "$want" ]; then
+            echo "tag $tag does not match internal/version ($want)" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check (gofmt, vet, tests)
+        run: make check
+
+      - name: Create the tag (manual run)
+        if: github.ref_type != 'tag'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Build release archives
+        run: make release
+
+      - name: Extract release notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          ver="${TAG#v}"
+          awk -v v="$ver" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on && /^\[[^]]+\]: / {next}
+            on {print}
+          ' docs/CHANGELOG.md > notes.md
+          test -s notes.md || echo "Release $TAG" > notes.md
+
+      - name: Publish the release
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+            --title "qrubyscanner ${TAG#v}" --notes-file notes.md --verify-tag

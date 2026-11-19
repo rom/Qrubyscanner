@@ -6,7 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Initial version. `qrubyscanner` is the Ruby counterpart of
+## [0.1.0] - 2026-11-19
+
+Initial release. `qrubyscanner` is the Ruby counterpart of
 [qphpscanner](https://github.com/rom/qphpscanner): it reuses that tool's
 scanner, probe, report, config, audit-trail and web-GUI layers unchanged in
 behaviour, and replaces the detection core with a Ruby one.
@@ -101,3 +103,6 @@ behaviour, and replaces the detection core with a Ruby one.
   politeness controls, resume, PCAP + session-log audit trail, record & replay
   corpora, signature packs, favicon catalogue, YAML config with full CLI
   parity, shell completions, and the web GUI.
+
+[Unreleased]: https://github.com/rom/Qrubyscanner/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/rom/Qrubyscanner/releases/tag/v0.1.0

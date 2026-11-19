@@ -165,6 +165,10 @@ project's lockfile, pass it with `--gemfile Gemfile.lock`. See
 
 ## Install
 
+Pre-built binaries for Linux, macOS and Windows (amd64 and arm64) are attached
+to each [release](https://github.com/rom/Qrubyscanner/releases), with a
+`SHA256SUMS` file.
+
 ```sh
 # from source (Go 1.24+)
 git clone https://github.com/rom/qrubyscanner
