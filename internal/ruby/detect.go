@@ -747,33 +747,20 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 		})
 	}
 
-	// Rack 3 writes cookie attributes in lower case ("; httponly;
-	// samesite=lax"); most other stacks capitalise them.
-	for _, sc := range resp.HeaderValues("Set-Cookie") {
-		if strings.Contains(sc, "; httponly") && strings.Contains(sc, "; samesite=") {
-			addEv(Evidence{
-				Signal: "header.rack3-cookie-attrs", Source: source, Weight: 20,
-				Detail: "Set-Cookie attributes are written in lower case (httponly; samesite=…), as Rack 3 does",
-				Where:  "Set-Cookie header", How: "attribute casing",
-				Snippet: "Set-Cookie: …; httponly; samesite=…", Probe: source,
-			})
-			break
-		}
-	}
-
 	// Sinatra's default headers: Rack::Protection's trio plus its
 	// characteristic "text/html;charset=utf-8" (no space after the semicolon).
 	if resp.HeaderGet("Content-Type") == "text/html;charset=utf-8" &&
 		strings.EqualFold(resp.HeaderGet("X-Frame-Options"), "SAMEORIGIN") &&
 		strings.EqualFold(resp.HeaderGet("X-Content-Type-Options"), "nosniff") &&
-		strings.HasPrefix(resp.HeaderGet("X-XSS-Protection"), "1") {
+		resp.HeaderGet("X-XSS-Protection") == "1; mode=block" {
+		// Other stacks can be configured to send the same set, so this is
+		// supporting evidence only.
 		addEv(Evidence{
-			Signal: "header.sinatra-defaults", Source: source, Weight: 35,
+			Signal: "header.sinatra-defaults", Source: source, Weight: 20,
 			Detail: "Sinatra default response headers (Rack::Protection set with Content-Type text/html;charset=utf-8)",
 			Where:  "response headers", How: "header combination",
 			Snippet: "Content-Type: text/html;charset=utf-8", Probe: source,
 		})
-		a.addFw("Sinatra")
 	}
 
 	// Sinatra's production not-found reply: the router falls through
@@ -814,6 +801,10 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 				how = "cookie-name suffix match"
 			}
 			signal := "cookie." + strings.ToLower(strings.Trim(sig.name, "_-"))
+			if strings.HasPrefix(sig.name, "ahoy_") {
+				signal = "cookie.ahoy" // the visit and visitor cookies count once
+				a.addGem("ahoy_matey")
+			}
 			if sig.kind == matchSuffix && strings.HasPrefix(sig.name, ".") {
 				signal = "cookie.rack-session-name"
 			} else if sig.kind == matchSuffix {
@@ -842,7 +833,15 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 	// Secret-bearing files (keys, credentials, logs) are still matched, but
 	// their content is never quoted into evidence.
 	withhold := resp.Status == 200 && sensitivePath(source)
+	prose := resp.Status < 400 && looksLikeProse(body)
+	phoenix := looksPhoenix(resp, body)
 	for _, sig := range bodySigs {
+		if sig.errorOnly && prose {
+			continue
+		}
+		if phoenix && (sig.id == "body.asset-digest-weak" || sig.id == "body.rails-asset-digest") {
+			continue
+		}
 		if loc := sig.re.FindStringIndex(body); loc != nil {
 			snippet, line := bodyContext(body, loc[0], loc[1])
 			if withhold {
@@ -869,6 +868,14 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 		}
 	}
 	a.bodyVersions(body, source)
+	if n := hamlQuoteCount(body); n > 0 {
+		addEv(Evidence{
+			Signal: "body.haml-quoting", Source: source, Weight: 20,
+			Detail: fmt.Sprintf("HTML attributes are consistently single-quoted (%d of them) — the output style of Haml templates", n),
+			Where:  "response body", How: "attribute-quoting statistics", Probe: source,
+		})
+		a.addGem("haml")
+	}
 
 	if m := rePoweredBy.FindStringSubmatch(body); m != nil {
 		a.addFw(canonicalApp(m[1]))
@@ -932,6 +939,17 @@ func (a *analysis) headerHeuristics(resp *probe.Response, source string, addEv f
 	}
 	if v := resp.HeaderGet("Foreman_version"); v != "" {
 		a.setComp("Foreman", v, "Foreman_version header")
+	}
+
+	// Phoenix (Elixir) copied Rails' default Cache-Control and secure-browser
+	// headers, so those combinations prove nothing on a Phoenix response.
+	if looksPhoenix(resp, resp.BodyString()) {
+		addEv(Evidence{
+			Signal: "stack.phoenix", Source: source, Weight: 0,
+			Detail: "Phoenix (Elixir) markers present — Rails-like default headers on this response are not counted",
+			Where:  "response headers / cookies / body", How: "negative fingerprint", Probe: source,
+		})
+		return
 	}
 
 	// Rack::ETag weak validator together with Rails' default Cache-Control.
@@ -1404,6 +1422,84 @@ func partitionAddons(frameworks []string) (fw, addons []string) {
 		}
 	}
 	return fw, addons
+}
+
+var (
+	rePhoenixCookie = regexp.MustCompile(`^_[a-z0-9_]+_key$`)
+	rePhoenixReqID  = regexp.MustCompile(`^[A-Za-z0-9_-]{16,24}$`)
+)
+
+// looksPhoenix reports markers of the Phoenix framework (Elixir), whose
+// defaults deliberately mirror Rails': the same Cache-Control, the same secure
+// headers and MD5-digested /assets/ files. It differs in its session cookie
+// (_<app>_key), its request ids (a short base64 token, not a UUID), the
+// absence of X-Runtime, and LiveView's phx- attributes.
+func looksPhoenix(resp *probe.Response, body string) bool {
+	if resp == nil {
+		return false
+	}
+	for _, c := range resp.Cookies {
+		if rePhoenixCookie.MatchString(strings.ToLower(c.Name)) {
+			return true
+		}
+	}
+	if id := strings.TrimSpace(resp.HeaderGet("X-Request-Id")); id != "" && resp.HeaderGet("X-Runtime") == "" &&
+		rePhoenixReqID.MatchString(id) && !reUUID.MatchString(id) && strings.ToLower(id) != id {
+		return true
+	}
+	return strings.Contains(body, "phx-track-static") || strings.Contains(body, "data-phx-") || strings.Contains(body, " phx-")
+}
+
+// looksLikeProse reports a page that is documentation, a blog post or a Q&A
+// thread — content that quotes class names and error messages as text.
+func looksLikeProse(body string) bool {
+	if len(body) < 2048 {
+		return false
+	}
+	return strings.Contains(body, "<code") || strings.Contains(body, "<article") || strings.Contains(body, "<pre") ||
+		strings.Contains(body, "<p>") || strings.Contains(body, "<nav")
+}
+
+var (
+	reAttrSingle = regexp.MustCompile(`\s[a-zA-Z-]+='[^'<>]*'`)
+	reAttrDouble = regexp.MustCompile(`\s[a-zA-Z-]+="[^"<>]*"`)
+)
+
+// hamlQuoteCount returns the number of single-quoted HTML attributes when a
+// document's markup is quoted the way Haml emits it (attributes wrapped in
+// single quotes), or 0. Hand-written and most generated HTML uses double
+// quotes, so a document that is overwhelmingly single-quoted is a mild Ruby
+// indicator. Only the document head and first tags are examined, and inline
+// scripts — where single quotes are ordinary — are skipped.
+func hamlQuoteCount(body string) int {
+	if len(body) > 16384 {
+		body = body[:16384]
+	}
+	if !strings.Contains(body, "<html") && !strings.Contains(body, "<head") {
+		return 0
+	}
+	var b strings.Builder
+	rest := body
+	for {
+		i := strings.Index(rest, "<script")
+		if i < 0 {
+			b.WriteString(rest)
+			break
+		}
+		b.WriteString(rest[:i])
+		j := strings.Index(rest[i:], "</script>")
+		if j < 0 {
+			break
+		}
+		rest = rest[i+j+len("</script>"):]
+	}
+	markup := b.String()
+	single := len(reAttrSingle.FindAllStringIndex(markup, 400))
+	double := len(reAttrDouble.FindAllStringIndex(markup, 400))
+	if single >= 20 && single >= 6*double {
+		return single
+	}
+	return 0
 }
 
 // ctrlSig is a fingerprint of the soft-404 / catch-all baseline response (the

@@ -101,7 +101,9 @@ self-signed or otherwise invalid certificates.
 ## Scan depth: detect vs deep
 
 - `--mode detect` — decide **whether** each service is Ruby and record
-  the evidence. Fast; one request per service (plus security.txt).
+  the evidence. Fast; two requests per service (the page, and one path that
+  cannot exist — many deployments only reveal the Ruby application on a path
+  it routes itself), plus security.txt.
 - `--mode deep` (default) — additionally fetch a small set of read-only probe paths
   (`/rails/info/properties`, `/up`, the Rails static error pages,
   `/Gemfile.lock`, `/.ruby-version`, `/config.ru`, …), a guaranteed-404 and

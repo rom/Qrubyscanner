@@ -593,9 +593,13 @@ func scanService(ctx context.Context, fetcher *probe.Fetcher, j job, opts Option
 	// and Ruby version leakage.
 	var fpExtra []*probe.Response
 	var notFound *probe.Response
+	// The not-found page is requested in every mode: many real deployments
+	// serve their front page from a CDN, a static site or a JavaScript front
+	// end, and only show the Ruby application (X-Runtime, Rails default
+	// headers, framework 404 pages) on a path the application itself routes.
+	notFound = fetcher.Get(ctx, base+"/qrubyscanner_probe_404")
 	if opts.Mode == ModeDeep {
 		fpExtra = append(fpExtra, fetcher.Request(ctx, "OPTIONS", base+"/"))
-		notFound = fetcher.Get(ctx, base+"/qrubyscanner_probe_404")
 		fpExtra = append(fpExtra, notFound)
 		for _, p := range serverStatusPaths() {
 			fpExtra = append(fpExtra, fetcher.Get(ctx, base+p))
@@ -614,6 +618,7 @@ func scanService(ctx context.Context, fetcher *probe.Fetcher, j job, opts Option
 		Root:         root,
 		Catalog:      opts.Catalog,
 		BundlerFiles: opts.BundlerFiles,
+		Control:      notFound,
 	}
 	if in.Deep {
 		in.Extra = map[string]*probe.Response{}

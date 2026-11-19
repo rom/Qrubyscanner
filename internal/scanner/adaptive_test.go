@@ -69,9 +69,9 @@ func TestAdaptiveProbesDiscourseOnlyAfterEvidence(t *testing.T) {
 			count("/srv/status"), count("/about.json"))
 	}
 	// No GitLab evidence → its probes are NOT issued.
-	if count("/users/sign_in") != 0 || count("/help") != 0 {
-		t.Errorf("GitLab probes issued without evidence: telescope=%d horizon=%d",
-			count("/users/sign_in"), count("/help"))
+	if count("/api/v4/version") != 0 || count("/help") != 0 {
+		t.Errorf("GitLab probes issued without evidence: api=%d help=%d",
+			count("/api/v4/version"), count("/help"))
 	}
 	// Generic Ruby discovery still runs (Ruby-powered).
 	if count("/rails/info/properties") == 0 {

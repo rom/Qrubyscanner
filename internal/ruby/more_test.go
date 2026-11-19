@@ -317,7 +317,7 @@ func TestMorePassiveSignals(t *testing.T) {
 		{"server-timing", resp(200, map[string]string{"Server-Timing": "sql.active_record;dur=1.2, process_action.action_controller;dur=9"}, ""), "header.server-timing", "Rails"},
 		{"web-console", resp(200, map[string]string{"X-Web-Console-Session-Id": "abc"}, ""), "header.x-web-console-session-id", ""},
 		{"request-id+runtime", resp(200, map[string]string{"X-Request-Id": "29ed5dc5-5585-4517-9e74-eb871f57f09a", "X-Runtime": "0.015438"}, ""), "header.rails-request-id", ""},
-		{"sinatra-headers", resp(200, map[string]string{"Content-Type": "text/html;charset=utf-8", "X-Frame-Options": "SAMEORIGIN", "X-Content-Type-Options": "nosniff", "X-XSS-Protection": "1; mode=block"}, "hi"), "header.sinatra-defaults", "Sinatra"},
+		{"sinatra-headers", resp(200, map[string]string{"Content-Type": "text/html;charset=utf-8", "X-Frame-Options": "SAMEORIGIN", "X-Content-Type-Options": "nosniff", "X-XSS-Protection": "1; mode=block"}, "hi"), "header.sinatra-defaults", ""},
 		{"blocked-host", resp(403, nil, "<h1>Blocked hosts: evil.example</h1>"), "body.rails-blocked-host", "Rails"},
 		{"json-error", resp(404, nil, `{"status":404,"error":"Not Found"}`), "body.rails-json-error", "Rails"},
 		{"xml-error", resp(404, nil, `<?xml version="1.0"?><hash><status type="integer">404</status><error>Not Found</error></hash>`), "body.rails-xml-error", "Rails"},
@@ -345,19 +345,6 @@ func TestMorePassiveSignals(t *testing.T) {
 		t.Errorf("Spring error JSON matched: %+v", d.Evidence)
 	}
 
-	h := http.Header{}
-	h.Add("Set-Cookie", "_app_session=abc; path=/; secure; httponly; samesite=lax")
-	r := &probe.Response{Status: 200, Header: h, RequestURL: "http://h/"}
-	if d := Analyze(Input{TargetURL: "http://h/", Root: r}); !hasSignal(d, "header.rack3-cookie-attrs") {
-		t.Error("Rack 3 cookie casing")
-	}
-	h = http.Header{}
-	h.Add("Set-Cookie", "sid=abc; Path=/; HttpOnly; SameSite=Lax")
-	r = &probe.Response{Status: 200, Header: h, RequestURL: "http://h/"}
-	if d := Analyze(Input{TargetURL: "http://h/", Root: r}); d.Confidence != 0 {
-		t.Error("capitalised cookie attributes are not Rack 3")
-	}
-
 	d = deep(resp(200, nil, "x"), map[string]*probe.Response{
 		"http://h/icon.svg": resp(200, nil, "<svg width=\"512\" height=\"512\" xmlns=\"http://www.w3.org/2000/svg\">\n  <circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"red\"/>\n</svg>\n")})
 	if !hasSignal(d, "diag.rails-default-icon") {
@@ -370,5 +357,83 @@ func TestMorePassiveSignals(t *testing.T) {
 	d = Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, "x", &http.Cookie{Name: "bookshelf.session", Value: "x"})})
 	if !hasStr(d.Frameworks, "Rack") {
 		t.Error(".session cookie")
+	}
+}
+
+// Phoenix (Elixir) mirrors Rails' default headers and asset digests; observed
+// on hex.pm and phoenixframework.org.
+func TestPhoenixIsNotRails(t *testing.T) {
+	hdr := map[string]string{
+		"Cache-Control":                     "max-age=0, private, must-revalidate",
+		"X-Permitted-Cross-Domain-Policies": "none",
+		"X-Download-Options":                "noopen",
+		"Referrer-Policy":                   "strict-origin-when-cross-origin",
+		"X-Request-Id":                      "GOliXQOLSIlh6XAAsijD",
+		"ETag":                              `W/"d156facee3ef5dd0a1838ab02a6c20de"`,
+	}
+	body := `<link rel="stylesheet" href="/assets/app-0c9e66cbf6725507da6bf297873fa809.css">`
+	d := Analyze(Input{TargetURL: "http://h/", Deep: true, Root: resp(200, hdr, body, &http.Cookie{Name: "_hexpm_key", Value: "XCP.abc"})})
+	if d.Confidence != 0 || d.IsRuby || len(d.Frameworks) != 0 {
+		t.Fatalf("Phoenix must score 0: %d %v %+v", d.Confidence, d.Frameworks, d.Evidence)
+	}
+	if !hasSignal(d, "stack.phoenix") {
+		t.Error("phoenix marker not recorded")
+	}
+	// The same headers on a Rails response (UUID request id, X-Runtime) count.
+	hdr["X-Request-Id"] = "29ed5dc5-5585-4517-9e74-eb871f57f09a"
+	hdr["X-Runtime"] = "0.015438"
+	d = Analyze(Input{TargetURL: "http://h/", Root: resp(200, hdr, body)})
+	if !d.IsRuby || !hasSignal(d, "header.rails-security-defaults") || !hasSignal(d, "header.rails-cache-defaults") {
+		t.Fatalf("Rails headers must still count: %+v", d.Evidence)
+	}
+}
+
+// Documentation and blog pages quote Rails class names without running Ruby;
+// observed on api.rubyonrails.org.
+func TestProseMentionsAreNotEvidence(t *testing.T) {
+	doc := "<html><body><nav>API</nav><article><p>Use <code>ActiveRecord::Base</code> and rescue ActionController::RoutingError; " +
+		"a NoMethodError says undefined method `foo' for nil.</p>" + strings.Repeat("<p>documentation text</p>", 120) + "</article></body></html>"
+	d := Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, doc)})
+	if d.Confidence != 0 {
+		t.Fatalf("documentation page scored %d: %+v", d.Confidence, d.Evidence)
+	}
+	// The same names on an error response are real evidence.
+	d = Analyze(Input{TargetURL: "http://h/", Root: resp(500, nil, doc)})
+	if !d.IsRuby {
+		t.Fatal("error page naming Rails classes should count")
+	}
+}
+
+func TestAssetDigestTiers(t *testing.T) {
+	sha := Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, `<img src="/assets/logo-66166b2e55d67988b56b4bd28b63c271e2b9713358cb723070a966166b2e55d6.png">`)})
+	if !hasSignal(sha, "body.rails-asset-digest") {
+		t.Error("SHA-256 digest on an image should match")
+	}
+	weak := Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, `<script src="/assets/manifest-5907eb9a.js"></script>`)})
+	if hasSignal(weak, "body.rails-asset-digest") || weak.Verdict != VerdictNone {
+		t.Errorf("an 8-character digest alone must stay below 'possible': %s %+v", weak.Verdict, weak.Evidence)
+	}
+}
+
+func TestAhoyAndHaml(t *testing.T) {
+	d := Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, "x",
+		&http.Cookie{Name: "ahoy_visit", Value: "a"}, &http.Cookie{Name: "ahoy_visitor", Value: "b"})})
+	n := 0
+	for _, e := range d.Evidence {
+		if e.Signal == "cookie.ahoy" {
+			n++
+		}
+	}
+	if n != 1 || !hasStr(d.Gems, "ahoy_matey") {
+		t.Fatalf("ahoy cookies should count once: %d %v", n, d.Gems)
+	}
+	haml := "<html lang='en'><head>" + strings.Repeat("<meta content='x' name='y'>\n<link href='/a.css' rel='stylesheet'>\n", 12) +
+		"<script>var a = {b: 'c'};</script></head><body class='home'></body></html>"
+	if d := Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, haml)}); !hasSignal(d, "body.haml-quoting") {
+		t.Error("Haml-style quoting not noticed")
+	}
+	plain := "<html lang=\"en\"><head>" + strings.Repeat("<meta content=\"x\" name=\"y\">", 30) + "<script>var s='a', t='b', u='c';</script></head></html>"
+	if d := Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, plain)}); d.Confidence != 0 {
+		t.Error("double-quoted HTML must not match")
 	}
 }

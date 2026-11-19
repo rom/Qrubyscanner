@@ -144,7 +144,7 @@ sudo make install
 # Full fingerprint (deep is the default): Ruby version, Rails, gems, Ruby2Shell
 qrubyscanner example.com
 
-# Only answer "is this service Ruby?" — one request per service:
+# Only answer "is this service Ruby?" — two requests per service:
 qrubyscanner --mode detect example.com
 
 # A few ports, with the project's lockfile, a PDF report, and a CI gate:
@@ -231,9 +231,30 @@ runs Ruby — a fixed list of diagnostic and project paths
 requested only once that application is indicated. Nothing is submitted,
 nothing is brute-forced, and no exploit or crash trigger is ever sent.
 `--request-budget` caps the optional part, and `--mode detect` reduces a scan
-to a single request per service.
+to two requests per service: the page and one path that cannot exist.
+
+## Why the not-found page matters
+
+Many real Ruby deployments show nothing on their front page: it is served by a
+CDN, a static marketing site or a JavaScript front end. The application only
+becomes visible on a path it routes itself, so every mode also requests one
+URL that cannot exist and analyses that reply (`X-Runtime`, Rails' default
+headers, the framework's 404 page). Checked against about 130 public sites,
+this is what separated sites such as Strava, Dribbble, Instacart and gitlab.com
+from a plain "no evidence" result. Deep mode additionally requests
+`/users/sign_in` and `/session/new`, which the application always renders.
+
+The same survey drove the false-positive guards: Phoenix (Elixir) copies
+Rails' default headers and asset-digest style and is recognised and excluded;
+class and error names quoted on documentation or blog pages do not count;
+short asset digests, GitHub Pages hosting and marketing pages that merely
+mention a product are not treated as evidence.
 
 ## Limits
+
+- A site whose every reachable response comes from a CDN or WAF (a block page,
+  a cached static front) gives no Ruby evidence; that is reported as `none`,
+  not guessed.
 
 - A hardened production Rails app behind a proxy usually reveals that it *is*
   Rails but not which Ruby it runs. That is reported honestly as "version not

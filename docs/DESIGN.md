@@ -180,8 +180,23 @@ always explainable, and each distinct signal is counted once.
   a UUID `X-Request-Id` with `X-Runtime`, Rack 3's lower-case cookie
   attributes, Sinatra's default header set.
 - Sinatra's bare `<h1>Not Found</h1>` with `X-Cascade: pass`.
-- The guaranteed-404 response is analysed like any other body, and doubles as
-  the soft-404 baseline that gates behavioural signals on catch-all servers.
+- The guaranteed-404 response is requested in **every** mode and analysed like
+  any other body: a front page served by a CDN or a JavaScript front end often
+  hides an application that is plain to see on a path it routes itself. It
+  also doubles as the soft-404 baseline that gates behavioural signals on
+  catch-all servers.
+
+**Negative fingerprints**
+- **Phoenix (Elixir)** mirrors Rails' default `Cache-Control`, secure headers
+  and MD5-digested `/assets/` files. It is recognised by its `_<app>_key`
+  cookie, short base64 request ids, missing `X-Runtime` and `phx-` attributes;
+  on such a response the Rails-like header combinations and asset digests are
+  not counted.
+- **Prose pages** (documentation, blogs, Q&A): signatures that match bare
+  class or error names apply only to error responses and plain pages.
+- Asset digests are tiered: SHA-length digests count as Rails evidence; MD5-
+  length and 8-character digests, which other toolchains also emit, are
+  supporting evidence only.
 
 ### Version, variant, frameworks, gems, app server
 

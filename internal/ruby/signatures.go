@@ -92,6 +92,8 @@ var cookieSigs = []cookieSig{
 	{"guest_token", matchExact, "Spree", 30, "Spree/Solidus guest order token cookie"},
 	{"_gh_sess", matchExact, "GitHub", 45, "GitHub (Rails) session cookie"},
 	{"_gh_ent", matchPrefix, "GitHub Enterprise Server", 50, "GitHub Enterprise session cookie"},
+	{"ahoy_visitor", matchExact, "", 40, "Ahoy analytics cookie (ahoy_matey gem)"},
+	{"ahoy_visit", matchExact, "", 40, "Ahoy analytics cookie (ahoy_matey gem)"},
 	{"remember_user_token", matchExact, "", 50, "Devise remember-me cookie"},
 	{"remember_admin_user_token", matchExact, "", 50, "Devise remember-me cookie (admin scope)"},
 	{"_passenger_route", matchExact, "", 25, "Phusion Passenger sticky-session cookie"},
@@ -157,6 +159,7 @@ var headerSigs = []headerSig{
 	{header: "X-Web-Console-Mounted-Path", framework: "Rails Web Console", rubyImplied: true, weight: 85, detail: "web-console mount-path header"},
 	{header: "X-Meta-Request-Version", framework: "Rails", rubyImplied: true, weight: 65, detail: "meta_request gem header (RailsPanel development tooling)"},
 	{header: "Turbolinks-Location", framework: "Rails", rubyImplied: true, weight: 45, detail: "Turbolinks redirect header (turbolinks-rails)"},
+	{header: "X-UA-Compatible", re: regexp.MustCompile(`(?i)^IE=Edge,chrome=1$`), rubyImplied: true, weight: 20, detail: "X-UA-Compatible: IE=Edge,chrome=1 response header (Rails 3 BestStandardsSupport default)"},
 	{header: "Link", re: rePreloadLink, framework: "Rails", rubyImplied: true, weight: 35, detail: "Link preload header for fingerprinted asset-pipeline files"},
 
 	// --- Applications ---
@@ -168,7 +171,6 @@ var headerSigs = []headerSig{
 	{header: "X-Gitlab-Feature-Category", framework: "GitLab", rubyImplied: true, weight: 70, detail: "GitLab feature-category header"},
 	{header: "X-Gitlab-Custom-Error", framework: "GitLab", rubyImplied: true, weight: 60, detail: "GitLab error header"},
 	{header: "X-GitHub-Enterprise-Version", framework: "GitHub Enterprise Server", rubyImplied: true, weight: 60, detail: "GitHub Enterprise Server version header"},
-	{header: "X-GitHub-Request-Id", framework: "GitHub", rubyImplied: true, weight: 30, detail: "GitHub request id header (GitHub is a Rails application)"},
 	{header: "X-Canvas-Meta", framework: "Canvas LMS", rubyImplied: true, weight: 65, detail: "Canvas LMS metadata header"},
 	{header: "Foreman_version", framework: "Foreman", rubyImplied: true, weight: 65, detail: "Foreman API version header"},
 	{header: "Foreman_api_version", framework: "Foreman", rubyImplied: true, weight: 60, detail: "Foreman API header"},
@@ -186,6 +188,27 @@ type bodySig struct {
 	rubyImplied bool
 	weight      int
 	detail      string
+	// errorOnly restricts a signature that matches bare class or error names
+	// to error responses and plain pages: documentation, blogs and Q&A sites
+	// quote those names constantly without running Ruby.
+	errorOnly bool
+}
+
+// errOnly marks signatures by id as errorOnly (see bodySig).
+var errOnlyIDs = map[string]bool{
+	"body.rails-exception-class": true, "body.rails-routing-error": true, "body.rack-class": true,
+	"body.sinatra-class": true, "body.ruby-nomethod": true, "body.ruby-uninitialized-const": true,
+	"body.ruby-exception-class": true, "body.hanami": true, "body.padrino": true, "body.roda": true,
+	"body.grape": true, "body.ruby-backtrace": true, "body.bundler-error": true, "body.erb-source": true,
+	"body.ruby-source": true, "body.rails-i18n-missing": false,
+}
+
+func init() {
+	for i := range bodySigs {
+		if errOnlyIDs[bodySigs[i].id] {
+			bodySigs[i].errorOnly = true
+		}
+	}
 }
 
 func bs(id, re, framework string, weight int, detail string) bodySig {
@@ -216,13 +239,16 @@ var bodySigs = []bodySig{
 	bs("body.rails-routing-error", `No route matches \[(?:GET|POST|HEAD|PUT|PATCH|DELETE|OPTIONS)\]|ActionController::(?:RoutingError|UnknownFormat|InvalidAuthenticityToken|ParameterMissing|BadRequest|UnknownHttpMethod)`, "Rails", 80, "Rails routing / controller exception"),
 	bs("body.rails-exception-class", `\b(?:ActiveRecord::\w+|ActionView::(?:Template::Error|MissingTemplate)|ActionDispatch::\w+|AbstractController::\w+|ActiveSupport::\w+|ActiveModel::\w+|ActiveStorage::\w+)\b`, "Rails", 70, "Rails framework class named in the response"),
 	bs("body.rails-welcome", `Yay! You(?:&rsquo;|’|')re on Rails!|You(?:&rsquo;|’|')re riding Ruby on Rails!|<title>Ruby on Rails(?:: Welcome aboard| \d[\d.]*)?</title>`, "Rails", 85, "Rails default welcome page"),
-	bs("body.rails-default-error-page", `rails-default-error-page|The page you were looking for doesn(?:&#39;|&rsquo;|’|')t exist|We(?:&#39;|&rsquo;|’|')re sorry, but something went wrong|The change you wanted was rejected|If you are the application owner check the logs for more information|The server cannot process the request due to a client error`, "Rails", 65, "Rails default static error page (public/404|422|500.html)"),
+	bs("body.rails-default-error-page", `rails-default-error-page|[Tt]he page you were looking for doesn(?:&#39;|&rsquo;|’|')t exist|We(?:&#39;|&rsquo;|’|')re sorry, but something went wrong|The change you wanted was rejected|If you are the application owner check the logs for more information|The server cannot process the request due to a client error`, "Rails", 65, "Rails default static error page (public/404|422|500.html)"),
 	bs("body.rails-csrf-meta", `<meta\s+name=["']csrf-param["']\s+content=["']authenticity_token["']|<meta\s+content=["']authenticity_token["']\s+name=["']csrf-param["']`, "Rails", 60, "Rails csrf_meta_tags (csrf-param = authenticity_token)"),
 	bs("body.rails-authenticity-token", `name=["']authenticity_token["']`, "Rails", 50, "Rails form authenticity_token field"),
 	bs("body.rails-utf8-field", `name=["']utf8["'][^>]*value=["'](?:&#x2713;|✓)["']`, "Rails", 45, "Rails form utf8 enforcer field (Rails < 6)"),
 	bs("body.rails-ujs", `data-disable-with=|rails-ujs|jquery_ujs|data-turbo-method=`, "Rails", 30, "Rails UJS / Turbo data attributes"),
 	bs("body.rails-turbo-track", `data-turbo(?:links)?-track=["'](?:reload|true)["']`, "Rails", 35, "Turbo/Turbolinks asset tracking attribute (Rails default layout)"),
-	bs("body.rails-asset-digest", `/assets/[\w./-]+-(?:[0-9a-f]{8}|[0-9a-f]{32,64})\.(?:js|css)`, "Rails", 35, "Sprockets/Propshaft fingerprinted asset (/assets/name-<digest>)"),
+	bs("body.rails-asset-digest", `/assets/[\w./-]+-(?:[0-9a-f]{40}|[0-9a-f]{64})\.(?:js|css|map|png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|eot)`, "Rails", 35, "Sprockets fingerprinted asset (/assets/name-<SHA digest>)"),
+	// MD5-length and 8-character digests are also produced by Phoenix
+	// (phx.digest) and JavaScript bundlers, so they are supporting evidence only.
+	bs("body.asset-digest-weak", `/assets/[\w./-]+-(?:[0-9a-f]{8}\.(?:js|css)|[0-9a-f]{32}\.(?:js|css|png|jpe?g|gif|svg|webp|woff2?))`, "", 15, "fingerprinted /assets/ file (Sprockets 2 / Propshaft style; also used by other toolchains)"),
 	bs("body.rails-webpacker", `/packs(?:-test)?/(?:js|css|media)/[\w./-]+-[0-9a-f]{8,}`, "Rails", 35, "Webpacker/Shakapacker pack path (/packs/…)"),
 	bs("body.rails-importmap", `<script type=["']importmap["'][^>]*data-turbo-track`, "Rails", 50, "importmap-rails script tag"),
 	bs("body.rails-active-storage", `/rails/active_storage/(?:blobs|representations|disk|direct_uploads)`, "Rails", 70, "Active Storage URL"),
@@ -278,9 +304,9 @@ var bodySigs = []bodySig{
 	bs("body.mission-control", `mission_control/jobs/application|<title>Mission Control - Jobs`, "Mission Control Jobs", 50, "Mission Control Jobs dashboard"),
 
 	// --- Applications ---
-	bs("body.gitlab", `content=["']GitLab["'][^>]*property=["']og:site_name["']|property=["']og:site_name["'][^>]*content=["']GitLab["']|gon\.gitlab_url|window\.gon\s*=\s*\{\};\s*gon\.api_version|<meta content=["']GitLab["'] name=["']description`, "GitLab", 75, "GitLab page markers"),
+	bs("body.gitlab", `gon\.gitlab_url|window\.gon\s*=\s*\{\};\s*gon\.api_version|/assets/webpack/[\w.-]+\.chunk\.js|<meta content=["']GitLab["'] name=["']description`, "GitLab", 75, "GitLab application page markers"),
 	bs("body.discourse", `<meta name=["']generator["'] content=["']Discourse|id=["']data-discourse-setup["']|<meta name=["']discourse_theme_id["']|discourse-application`, "Discourse", 75, "Discourse page markers"),
-	bs("body.mastodon", `<div id=["']mastodon["']|content=["']Mastodon["'][^>]*property=["']og:site_name|<script id=["']initial-state["'] type=["']application/json["']|mastodon/mastodon`, "Mastodon", 70, "Mastodon page markers"),
+	bs("body.mastodon", `<div id=["']mastodon["']|<script id=["']initial-state["'] type=["']application/json["']`, "Mastodon", 70, "Mastodon application page markers"),
 	bs("body.redmine", `Powered by <a href=["']https?://www\.redmine\.org/?["'][^>]*>Redmine</a>|<meta name=["']description["'] content=["']Redmine["']|redmine\.org/guide`, "Redmine", 80, "Redmine page markers"),
 	bs("body.openproject", `<meta name=["']application-name["'] content=["']OpenProject["']|<meta name=["']openproject_initializer["']|openproject\.org`, "OpenProject", 65, "OpenProject page markers"),
 	bs("body.chatwoot", `window\.chatwootConfig\s*=|<title>[^<]*Chatwoot[^<]*</title>|window\.globalConfig\s*=\s*\{[^}]*INSTALLATION_NAME`, "Chatwoot", 65, "Chatwoot dashboard markers"),
@@ -292,7 +318,7 @@ var bodySigs = []bodySig{
 	bs("body.zammad", `<title>Zammad[^<]*</title>|Zammad Helpdesk|zammad\.org`, "Zammad", 60, "Zammad page markers"),
 	bs("body.huginn", `<title>Huginn</title>|huginn/huginn`, "Huginn", 60, "Huginn page markers"),
 	bs("body.errbit", `<title>[^<]*Errbit[^<]*</title>|errbit/errbit`, "Errbit", 60, "Errbit page markers"),
-	bs("body.decidim", `<meta name=["']generator["'] content=["']Decidim|decidim-[a-z]+|decidim\.org`, "Decidim", 60, "Decidim page markers"),
+	bs("body.decidim", `<meta name=["']generator["'] content=["']Decidim|/decidim-packs/|decidim/[a-z_]+-[0-9a-f]{8,}`, "Decidim", 60, "Decidim page markers"),
 	bs("body.refinery", `refinerycms|Refinery CMS`, "Refinery CMS", 60, "Refinery CMS page markers"),
 	bs("body.alchemy", `alchemy_cms|Alchemy CMS|alchemy/admin`, "Alchemy CMS", 55, "Alchemy CMS page markers"),
 	bs("body.camaleon", `camaleon_cms|Camaleon CMS`, "Camaleon CMS", 60, "Camaleon CMS page markers"),

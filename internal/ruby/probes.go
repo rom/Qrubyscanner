@@ -47,6 +47,11 @@ func GenericDeepProbePaths() []string {
 		"/404.html",
 		"/422.html",
 		"/500.html",
+		// Sign-in pages: the front page of many deployments is static or
+		// cached, while these are always rendered by the application (Devise's
+		// default route, and the Rails 8 authentication generator's).
+		"/users/sign_in",
+		"/session/new",
 		// Rails >= 7.2 generator defaults.
 		"/406-unsupported-browser.html",
 		"/icon.svg",
