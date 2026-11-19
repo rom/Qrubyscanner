@@ -107,6 +107,7 @@ func replayService(svc corpus.Service, opts Options) ServiceResult {
 	if svc.Deep {
 		in.Favicon = svc.Favicon.ToResponse()
 		in.ParamProbe = svc.ParamProbe.ToResponse()
+		in.MethodProbe = svc.MethodProbe.ToResponse()
 		in.Control = svc.Control.ToResponse()
 		if len(svc.Extra) > 0 {
 			in.Extra = make(map[string]*probe.Response, len(svc.Extra))

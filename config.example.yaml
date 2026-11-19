@@ -21,10 +21,10 @@ targets:
 ports: "80,443,8080,8000-8010"
 
 # Scan depth:
-#   detect — only decide whether a service is Ruby
-#   deep   — also fingerprint version, variant, frameworks/gems and
+#   deep   — (default) fingerprint version, variant, frameworks/gems and
 #            correlate known version-based vulnerabilities
-mode: detect
+#   detect — only decide whether a service is Ruby (one request per service)
+mode: deep
 
 # TLS handling: auto (infer from the port), on (force https) or off (force http).
 tls: auto

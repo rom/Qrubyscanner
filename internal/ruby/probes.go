@@ -16,6 +16,23 @@ import "strings"
 // carries no payload and only exercises ordinary parameter parsing.
 const ParamTypeProbe = "/?qrubyscanner[]=1&qrubyscanner[k]=1"
 
+// RequestIDProbeValue is sent as X-Request-Id on the parameter probe.
+// ActionDispatch::RequestId echoes a client-supplied request id back after
+// stripping everything except word characters, "-" and "@" — so a Rails
+// application answers with exactly RequestIDProbeEcho. A server that echoes
+// the value untouched, or not at all, is not showing that behaviour.
+const (
+	RequestIDProbeValue = "qruby.scan!1-@probe_x"
+	RequestIDProbeEcho  = "qrubyscan1-@probe_x"
+)
+
+// UnknownMethodProbe is a syntactically valid but non-existent HTTP method.
+// Puma answers methods it does not know with a bare "501 Not Implemented" and
+// an empty body before the application is consulted; Rails itself (behind
+// other servers) answers 405 via ActionController::UnknownHttpMethod. The
+// request has no body and no side effects.
+const UnknownMethodProbe = "QRUBYSCAN"
+
 // GenericDeepProbePaths are generic Ruby diagnostic/project discovery probes,
 // issued when a service plausibly runs Ruby.
 func GenericDeepProbePaths() []string {
@@ -30,6 +47,9 @@ func GenericDeepProbePaths() []string {
 		"/404.html",
 		"/422.html",
 		"/500.html",
+		// Rails >= 7.2 generator defaults.
+		"/406-unsupported-browser.html",
+		"/icon.svg",
 		"/robots.txt",
 		// Project files that are sometimes left inside the document root. A
 		// readable Gemfile.lock / .ruby-version discloses the Ruby version.

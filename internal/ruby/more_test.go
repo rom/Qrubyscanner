@@ -263,3 +263,112 @@ func TestLoadCataloguesOverHTTP(t *testing.T) {
 		t.Error("404 pack accepted")
 	}
 }
+
+func TestRequestIDSanitisationProbe(t *testing.T) {
+	root := resp(200, nil, "ok")
+	echo := func(v string) *Detection {
+		p := resp(200, map[string]string{"X-Request-Id": v}, "ok")
+		return Analyze(Input{TargetURL: "http://h/", Deep: true, Root: root, ParamProbe: p})
+	}
+	if d := echo(RequestIDProbeEcho); !hasSignal(d, "behavior.rails-request-id") || !hasStr(d.Frameworks, "Rails") || !d.IsRuby {
+		t.Fatalf("Rails request-id sanitisation not recognised: %+v", d.Evidence)
+	}
+	// A verbatim echo (many proxies and frameworks) or a fresh id is not Rails.
+	for _, v := range []string{RequestIDProbeValue, "0f8fad5b-d9cb-469f-a165-70867728950e", ""} {
+		if d := echo(v); hasSignal(d, "behavior.rails-request-id") {
+			t.Errorf("echo %q must not count", v)
+		}
+	}
+}
+
+func TestUnknownMethodProbe(t *testing.T) {
+	root := resp(200, map[string]string{"X-Runtime": "0.010000"}, `<meta name="csrf-param" content="authenticity_token" />`)
+	puma := resp(501, nil, "")
+	d := Analyze(Input{TargetURL: "http://h/", Deep: true, Root: root, MethodProbe: puma})
+	if !hasSignal(d, "behavior.puma-unknown-method") || d.AppServer != "Puma" {
+		t.Fatalf("Puma not inferred: %q %+v", d.AppServer, d.Evidence)
+	}
+	// Apache answers 501 with an HTML body; a server that 501s everything is no signal.
+	d = Analyze(Input{TargetURL: "http://h/", Deep: true, Root: root, MethodProbe: resp(501, nil, "<html>Method Not Implemented</html>")})
+	if hasSignal(d, "behavior.puma-unknown-method") {
+		t.Error("501 with a body is not Puma")
+	}
+	d = Analyze(Input{TargetURL: "http://h/", Deep: true, Root: root, MethodProbe: puma, Control: resp(501, nil, "")})
+	if hasSignal(d, "behavior.puma-unknown-method") {
+		t.Error("baseline 501 must suppress the signal")
+	}
+	d = Analyze(Input{TargetURL: "http://h/", Deep: true, Root: root, MethodProbe: resp(405, nil, "")})
+	if !hasSignal(d, "behavior.rails-unknown-method") {
+		t.Error("Rails 405 on unknown method")
+	}
+	d = Analyze(Input{TargetURL: "http://h/", Deep: true, Root: resp(200, nil, "x"), MethodProbe: resp(405, nil, "")})
+	if d.Confidence != 0 {
+		t.Errorf("a bare 405 without Rails evidence must score nothing: %+v", d.Evidence)
+	}
+}
+
+func TestMorePassiveSignals(t *testing.T) {
+	cases := []struct {
+		name   string
+		r      *probe.Response
+		signal string
+		fw     string
+	}{
+		{"server-timing", resp(200, map[string]string{"Server-Timing": "sql.active_record;dur=1.2, process_action.action_controller;dur=9"}, ""), "header.server-timing", "Rails"},
+		{"web-console", resp(200, map[string]string{"X-Web-Console-Session-Id": "abc"}, ""), "header.x-web-console-session-id", ""},
+		{"request-id+runtime", resp(200, map[string]string{"X-Request-Id": "29ed5dc5-5585-4517-9e74-eb871f57f09a", "X-Runtime": "0.015438"}, ""), "header.rails-request-id", ""},
+		{"sinatra-headers", resp(200, map[string]string{"Content-Type": "text/html;charset=utf-8", "X-Frame-Options": "SAMEORIGIN", "X-Content-Type-Options": "nosniff", "X-XSS-Protection": "1; mode=block"}, "hi"), "header.sinatra-defaults", "Sinatra"},
+		{"blocked-host", resp(403, nil, "<h1>Blocked hosts: evil.example</h1>"), "body.rails-blocked-host", "Rails"},
+		{"json-error", resp(404, nil, `{"status":404,"error":"Not Found"}`), "body.rails-json-error", "Rails"},
+		{"xml-error", resp(404, nil, `<?xml version="1.0"?><hash><status type="integer">404</status><error>Not Found</error></hash>`), "body.rails-xml-error", "Rails"},
+		{"turbo-stream", resp(200, nil, `<turbo-cable-stream-source channel="Turbo::StreamsChannel" signed-stream-name="x">`), "body.rails-turbo-stream", "Rails"},
+		{"importmap", resp(200, nil, `<script type="importmap">{"imports":{"@hotwired/turbo-rails": "/assets/turbo.min-abc.js"}}</script>`), "body.rails-importmap-turbo", "Rails"},
+		{"i18n", resp(200, nil, `<span class="translation_missing" title="translation missing: en.home.title">Title</span>`), "body.rails-i18n-missing", "Rails"},
+		{"devise", resp(401, nil, `{"error":"You need to sign in or sign up before continuing."}`), "body.devise-message", "Rails"},
+		{"rack-files", resp(404, nil, "File not found: /x.png\n"), "body.rack-files", "Rack"},
+		{"rack-attack", resp(429, nil, "Retry later\n"), "body.rack-attack", "Rack"},
+		{"puma-lowlevel", resp(500, nil, "An unhandled lowlevel error occurred. The application logs may have details.\n"), "body.puma-error", ""},
+		{"406", resp(200, nil, "<title>Your browser is not supported (406 Not Acceptable)</title>"), "body.rails-unsupported-browser", "Rails"},
+	}
+	for _, c := range cases {
+		d := Analyze(Input{TargetURL: "http://h/", Root: c.r})
+		if !hasSignal(d, c.signal) {
+			t.Errorf("%s: missing %s (%+v)", c.name, c.signal, d.Evidence)
+		}
+		if c.fw != "" && !hasStr(d.Frameworks, c.fw) {
+			t.Errorf("%s: framework %s missing: %v", c.name, c.fw, d.Frameworks)
+		}
+	}
+	// Spring Boot's error JSON has more keys and must not match the Rails shape.
+	d := Analyze(Input{TargetURL: "http://h/", Root: resp(404, nil, `{"timestamp":"t","status":404,"error":"Not Found","path":"/x"}`)})
+	if d.Confidence != 0 {
+		t.Errorf("Spring error JSON matched: %+v", d.Evidence)
+	}
+
+	h := http.Header{}
+	h.Add("Set-Cookie", "_app_session=abc; path=/; secure; httponly; samesite=lax")
+	r := &probe.Response{Status: 200, Header: h, RequestURL: "http://h/"}
+	if d := Analyze(Input{TargetURL: "http://h/", Root: r}); !hasSignal(d, "header.rack3-cookie-attrs") {
+		t.Error("Rack 3 cookie casing")
+	}
+	h = http.Header{}
+	h.Add("Set-Cookie", "sid=abc; Path=/; HttpOnly; SameSite=Lax")
+	r = &probe.Response{Status: 200, Header: h, RequestURL: "http://h/"}
+	if d := Analyze(Input{TargetURL: "http://h/", Root: r}); d.Confidence != 0 {
+		t.Error("capitalised cookie attributes are not Rack 3")
+	}
+
+	d = deep(resp(200, nil, "x"), map[string]*probe.Response{
+		"http://h/icon.svg": resp(200, nil, "<svg width=\"512\" height=\"512\" xmlns=\"http://www.w3.org/2000/svg\">\n  <circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"red\"/>\n</svg>\n")})
+	if !hasSignal(d, "diag.rails-default-icon") {
+		t.Error("default icon.svg")
+	}
+	d = Analyze(Input{TargetURL: "http://h/", Deep: true, Root: resp(200, nil, "x"), Favicon: resp(200, nil, "")})
+	if !hasSignal(d, "behavior.empty-favicon") {
+		t.Error("empty favicon")
+	}
+	d = Analyze(Input{TargetURL: "http://h/", Root: resp(200, nil, "x", &http.Cookie{Name: "bookshelf.session", Value: "x"})})
+	if !hasStr(d.Frameworks, "Rack") {
+		t.Error(".session cookie")
+	}
+}

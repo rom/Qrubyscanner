@@ -663,10 +663,10 @@ func cleanTargets(in []string) []string {
 }
 
 func normMode(m string) string {
-	if strings.ToLower(m) == scanner.ModeDeep {
-		return scanner.ModeDeep
+	if strings.ToLower(m) == scanner.ModeDetect {
+		return scanner.ModeDetect
 	}
-	return scanner.ModeDetect
+	return scanner.ModeDeep
 }
 
 func parsePortsField(s string) ([]int, error) {

@@ -368,9 +368,16 @@ func (f *Fetcher) Get(ctx context.Context, rawURL string) *Response {
 // enabled) up to the configured limit and aggregating evidence across hops.
 // Transient network failures are retried with exponential backoff.
 func (f *Fetcher) Request(ctx context.Context, method, rawURL string) *Response {
+	return f.RequestWithHeaders(ctx, method, rawURL, nil)
+}
+
+// RequestWithHeaders is Request with extra request headers for this one call
+// (sent on the initial hop only, never forwarded across a redirect). It is
+// used by behavioural probes that need to see how a server treats a header.
+func (f *Fetcher) RequestWithHeaders(ctx context.Context, method, rawURL string, extra map[string]string) *Response {
 	var out *Response
 	for attempt := 0; ; attempt++ {
-		out = f.do(ctx, method, rawURL)
+		out = f.do(ctx, method, rawURL, extra)
 		if out.Err == "" || !transientErr(out.Err) || attempt >= f.retries {
 			return out
 		}
@@ -393,7 +400,7 @@ func transientErr(msg string) bool {
 	return false
 }
 
-func (f *Fetcher) do(ctx context.Context, method, rawURL string) *Response {
+func (f *Fetcher) do(ctx context.Context, method, rawURL string, extra map[string]string) *Response {
 	start := time.Now()
 	out := &Response{RequestURL: rawURL, Header: http.Header{}}
 
@@ -426,6 +433,11 @@ func (f *Fetcher) do(ctx context.Context, method, rawURL string) *Response {
 				continue
 			}
 			req.Header.Set(k, v)
+		}
+		if hop == 0 {
+			for k, v := range extra {
+				req.Header.Set(k, v)
+			}
 		}
 		if f.cookie != "" && sameHost {
 			req.Header.Set("Cookie", f.cookie)

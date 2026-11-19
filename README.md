@@ -3,7 +3,7 @@
 A command-line and web tool, written in Go, that scans network ports and
 HTTP(S) services to determine whether they are **built on Ruby** (Rails,
 Sinatra, any Rack application), collects the supporting **evidence**, and
-produces **reports**. In **deep** mode it also fingerprints the Ruby version,
+produces **reports**. In **deep** mode (the default) it also fingerprints the Ruby version,
 frameworks, gems and app server, flags end-of-life branches, and correlates
 **known version-based vulnerabilities** — including
 [**Ruby2Shell**](https://verialabs.com/ruby2shell/) (GHSA-34m4-m9fh-gqp5).
@@ -22,7 +22,7 @@ reasons about them. It never attempts to exploit anything.
 
 Ruby2Shell is a heap overflow in CRuby's case conversion, present since Ruby
 2.4.0 and reachable without authentication in Rails and classic-style Sinatra.
-`qrubyscanner --mode deep` decides exposure **from versions only** — it sends
+`qrubyscanner` (deep mode, the default) decides exposure **from versions only** — it sends
 nothing resembling a trigger:
 
 | Ruby series | Affected | Fixed in |
@@ -65,9 +65,18 @@ project's lockfile, pass it with `--gemfile Gemfile.lock`. See
     welcome and static error pages, `authenticity_token`, Sprockets/Propshaft
     digests, Active Storage URLs, Sinatra's "doesn't know this ditty", Rack
     errors, leaked ERB/Ruby source, RubyGems and rbenv/RVM paths;
-  - **behaviour** — a harmless probe of Rack's query parser (a parameter
-    declared as both array and hash is rejected with 400 by Rails/Sinatra and
-    accepted by everything else), gated against a soft-404 baseline.
+  - **behaviour** — three harmless probes, gated against a soft-404 baseline:
+    Rack's query parser (a parameter declared as both array and hash is
+    rejected with 400 by Rails/Sinatra and accepted by everything else);
+    `X-Request-Id` sanitisation (Rails echoes a supplied id with everything
+    but word characters, `-` and `@` stripped); and an unknown HTTP method
+    (Puma answers a bare, empty 501 — which also names the app server of a
+    hardened production Rails app);
+  - **generator defaults and middleware traces** — Rails' default `icon.svg`
+    and `406-unsupported-browser.html`, `Server-Timing` event names, Rack 3
+    cookie-attribute casing, Sinatra's default header set, web-console
+    headers, Rails JSON/XML error bodies, the "Blocked host" page, Devise and
+    I18n messages, Rack::Files / Rack::Attack replies.
 - **Frameworks and applications**: Rails, Sinatra, Rack, Hanami, Padrino, Roda,
   Grape; GitLab, GitHub Enterprise Server, Discourse, Mastodon, Redmine,
   OpenProject, Chatwoot, diaspora\*, Spree/Solidus, Canvas LMS, Foreman,
@@ -132,14 +141,14 @@ sudo make install
 ## Quick start
 
 ```sh
-# Is this service Ruby?
+# Full fingerprint (deep is the default): Ruby version, Rails, gems, Ruby2Shell
 qrubyscanner example.com
 
-# Deep fingerprint a few ports — Ruby version, Rails, gems, Ruby2Shell:
-qrubyscanner --mode deep --ports 80,443,3000 example.com
+# Only answer "is this service Ruby?" — one request per service:
+qrubyscanner --mode detect example.com
 
-# Same, with the project's lockfile, a PDF report, and a CI gate:
-qrubyscanner --mode deep --gemfile Gemfile.lock --fail-on critical \
+# A few ports, with the project's lockfile, a PDF report, and a CI gate:
+qrubyscanner --ports 80,443,3000 --gemfile Gemfile.lock --fail-on critical \
              --report-out report.pdf example.com
 
 # Scan a subnet, force HTTPS, emit JSON to a file:
@@ -149,7 +158,7 @@ qrubyscanner --tls on --format json --out scan.json 10.0.0.0/28
 qrubyscanner --web           # then open http://127.0.0.1:8088/
 ```
 
-Example (deep mode against a WEBrick-served Sinatra app):
+Example (against a WEBrick-served Sinatra app):
 
 ```
 » http://203.0.113.10:4567/  (port 4567, http)
@@ -175,7 +184,7 @@ qrubyscanner --config scan.yaml
 
 | Option | Description |
 | --- | --- |
-| `--mode detect\|deep` | scan depth (default `detect`) |
+| `--mode deep\|detect` | scan depth (default `deep`) |
 | `--ports SPEC` | `80` · `80,443` · `8000-8100` · mixed (default: common web ports) |
 | `--tls auto\|on\|off` | TLS handling (default `auto`) |
 | `--format text\|json\|xml\|csv\|sarif\|ndjson` | scan output format (default `text`) |
@@ -213,14 +222,16 @@ are in [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 ## What deep mode requests
 
 Deep mode issues a bounded number of plain **GET** requests per service (plus
-one `OPTIONS`): the page itself, a guaranteed-404, the favicon, the Rack
-parameter probe, a few server-status paths, and — when the service plausibly
+one `OPTIONS` and one request with a made-up method): the page itself, a
+guaranteed-404, the favicon, the Rack parameter probe (which also carries the
+`X-Request-Id` test), a few server-status paths, and — when the service plausibly
 runs Ruby — a fixed list of diagnostic and project paths
 (`/rails/info/properties`, `/up`, `/404.html`, `/Gemfile.lock`,
 `/.ruby-version`, `/config/master.key`, …). Application-specific paths are
 requested only once that application is indicated. Nothing is submitted,
 nothing is brute-forced, and no exploit or crash trigger is ever sent.
-`--request-budget` caps the optional part.
+`--request-budget` caps the optional part, and `--mode detect` reduces a scan
+to a single request per service.
 
 ## Limits
 

@@ -153,7 +153,7 @@ type DNSResolver interface {
 // withDefaults fills unset options with sensible values.
 func (o Options) withDefaults() Options {
 	if o.Mode == "" {
-		o.Mode = ModeDetect
+		o.Mode = ModeDeep
 	}
 	if o.TLSMode == "" {
 		o.TLSMode = TLSAuto
@@ -631,7 +631,11 @@ func scanService(ctx context.Context, fetcher *probe.Fetcher, j job, opts Option
 		}
 		// Phase 1 — core Ruby signals, always collected.
 		in.Favicon = get(base + ruby.FaviconPath)
-		in.ParamProbe = get(base + ruby.ParamTypeProbe)
+		spent++
+		in.ParamProbe = fetcher.RequestWithHeaders(ctx, "GET", base+ruby.ParamTypeProbe,
+			map[string]string{"X-Request-Id": ruby.RequestIDProbeValue})
+		spent++
+		in.MethodProbe = fetcher.Request(ctx, ruby.UnknownMethodProbe, base+"/")
 
 		// If the host is rate-limiting (429/503, honouring any Retry-After by
 		// backing off rather than hammering), skip the optional discovery probes.
@@ -685,12 +689,13 @@ func finalizeService(res ServiceResult, in ruby.Input, opts Options, start time.
 // serialisable, sanitised corpus entry.
 func corpusService(target string, in ruby.Input) corpus.Service {
 	s := corpus.Service{
-		Target:     target,
-		Deep:       in.Deep,
-		Root:       corpus.FromResponse(in.Root),
-		Favicon:    corpus.FromResponse(in.Favicon),
-		ParamProbe: corpus.FromResponse(in.ParamProbe),
-		Control:    corpus.FromResponse(in.Control),
+		Target:      target,
+		Deep:        in.Deep,
+		Root:        corpus.FromResponse(in.Root),
+		Favicon:     corpus.FromResponse(in.Favicon),
+		ParamProbe:  corpus.FromResponse(in.ParamProbe),
+		MethodProbe: corpus.FromResponse(in.MethodProbe),
+		Control:     corpus.FromResponse(in.Control),
 	}
 	if len(in.Extra) > 0 {
 		s.Extra = make(map[string]*corpus.Response, len(in.Extra))

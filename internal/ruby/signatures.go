@@ -96,6 +96,7 @@ var cookieSigs = []cookieSig{
 	{"remember_admin_user_token", matchExact, "", 50, "Devise remember-me cookie (admin scope)"},
 	{"_passenger_route", matchExact, "", 25, "Phusion Passenger sticky-session cookie"},
 	{"request_method", matchExact, "", 20, "legacy Rails request_method cookie"},
+	{".session", matchSuffix, "Rack", 35, "Rack-style <app>.session cookie name"},
 	// Generic Rails cookie-store convention: `_<application>_session`. Listed
 	// last so a specific application match above wins the framework label.
 	{"_session", matchSuffix, "Rails", 45, "Rails cookie-store session cookie (_<app>_session)"},
@@ -151,6 +152,11 @@ var headerSigs = []headerSig{
 	{header: "X-Cascade", contains: "pass", rubyImplied: true, weight: 45, detail: "X-Cascade: pass (Rack router fall-through, Rails/Sinatra)"},
 	{header: "X-Rack-Mini-Profiler", rubyImplied: true, weight: 50, detail: "rack-mini-profiler header"},
 	{header: "X-Sinatra", framework: "Sinatra", rubyImplied: true, weight: 70, detail: "Sinatra header"},
+	{header: "Server-Timing", re: regexp.MustCompile(`\.(?:action_controller|active_record|action_view|active_support|action_dispatch)\b`), framework: "Rails", rubyImplied: true, weight: 75, detail: "Server-Timing lists ActiveSupport::Notifications events (ActionDispatch::ServerTiming, on by default in development)"},
+	{header: "X-Web-Console-Session-Id", framework: "Rails Web Console", rubyImplied: true, weight: 85, detail: "web-console session header (interactive Ruby console is mounted)"},
+	{header: "X-Web-Console-Mounted-Path", framework: "Rails Web Console", rubyImplied: true, weight: 85, detail: "web-console mount-path header"},
+	{header: "X-Meta-Request-Version", framework: "Rails", rubyImplied: true, weight: 65, detail: "meta_request gem header (RailsPanel development tooling)"},
+	{header: "Turbolinks-Location", framework: "Rails", rubyImplied: true, weight: 45, detail: "Turbolinks redirect header (turbolinks-rails)"},
 	{header: "Link", re: rePreloadLink, framework: "Rails", rubyImplied: true, weight: 35, detail: "Link preload header for fingerprinted asset-pipeline files"},
 
 	// --- Applications ---
@@ -224,6 +230,16 @@ var bodySigs = []bodySig{
 	bs("body.rails-action-text", `<trix-editor|class=["'][^"']*trix-content`, "Rails", 25, "Action Text / Trix editor markup"),
 	bs("body.rails-robots", `# See https?://www\.robotstxt\.org/(?:wc/norobots|robotstxt)\.html for documentation on how to use the robots\.txt file`, "Rails", 45, "Rails generator default robots.txt"),
 	bs("body.rails-devise-form", `name=["']user\[(?:email|login|password|remember_me)\]["']`, "Rails", 40, "Rails nested form parameters for a Devise-style user model"),
+	bs("body.rails-blocked-host", `Blocked hosts?: [^<\n]{1,200}|To allow requests to (?:these hosts|[^,<]{1,100}), (?:make sure|add the following)[^<]{0,120}config\.hosts`, "Rails", 85, "Rails HostAuthorization \"Blocked host\" page"),
+	bs("body.rails-unsupported-browser", `Your browser is not supported \(406`, "Rails", 70, "Rails default 406-unsupported-browser page (Rails 7.2 or later)"),
+	bs("body.rails-json-error", `^\s*\{"status":\d{3},"error":"[A-Za-z ]{2,40}"\}\s*$`, "Rails", 50, "Rails PublicExceptions JSON error body ({status, error})"),
+	bs("body.rails-xml-error", `<hash>\s*<status type="integer">\d{3}</status>\s*<error>`, "Rails", 70, "Rails PublicExceptions XML error body (ActiveSupport to_xml)"),
+	bs("body.rails-json-trace", `"traces":\{"Application Trace"|"exception":"#<Action(?:Controller|Dispatch)::`, "Rails", 85, "Rails development JSON exception payload"),
+	bs("body.rails-turbo-stream", `<turbo-cable-stream-source|signed-stream-name=`, "Rails", 60, "turbo-rails cable stream source"),
+	bs("body.rails-csp-nonce", `<meta\s+name=["']csp-nonce["']`, "Rails", 45, "Rails csp_meta_tag"),
+	bs("body.rails-importmap-turbo", `"@hotwired/turbo-rails"\s*:|"@rails/(?:ujs|actioncable|activestorage|actiontext)"\s*:`, "Rails", 55, "importmap pins for Rails JavaScript packages"),
+	bs("body.rails-i18n-missing", `class=["']translation_missing["']|translation missing: [a-z]{2}(?:-[A-Za-z]{2})?\.[\w.]+`, "Rails", 60, "Rails I18n missing-translation marker"),
+	bs("body.devise-message", `You need to sign in or sign up before continuing\.|Invalid (?:Email|Login|Username) or password\.|Signed out successfully\.|You have to confirm your (?:email address|account) before continuing\.`, "Rails", 55, "Devise default flash/JSON message"),
 	bs("body.rails-web-console", `data-mounted-path=["'][^"']*__web_console|__web_console/repl_sessions|id=["']console["'][^>]+data-session-id`, "Rails Web Console", 80, "Rails web-console is embedded (interactive Ruby console — development mode)"),
 	bs("body.better-errors", `__better_errors|BetterErrors::|<title>[^<]*better_errors`, "Better Errors", 75, "better_errors development error page"),
 
@@ -233,6 +249,9 @@ var bodySigs = []bodySig{
 	bs("body.sinatra-class", `Sinatra::(?:NotFound|Base|Application|ShowExceptions|BadRequest)`, "Sinatra", 80, "Sinatra class named in the response"),
 	bs("body.rack-class", `Rack::(?:ShowExceptions|Lint(?:::LintError)?|QueryParser|Utils|MethodOverride|Session|Multipart|Protection|Attack|Timeout)\b`, "Rack", 70, "Rack class named in the response"),
 	bs("body.rack-param-error", `expected (?:Hash|Array) \(got (?:String|Array|Hash|Rack::QueryParser::Params)\) for param|invalid %-encoding \(`, "Rack", 75, "Rack query-parser error message"),
+	bs("body.rack-files", `^File not found: /[^\n]{0,200}\n?$`, "Rack", 65, "Rack::Files / Rack::Static not-found body"),
+	bs("body.rack-urlmap", `^Not Found: /[^\n]{0,200}$`, "Rack", 50, "Rack::URLMap not-found body"),
+	bs("body.rack-attack", `^Retry later\n?$`, "Rack", 50, "Rack::Attack default throttle response"),
 	bs("body.rack-protection", `Forbidden by Rack::Protection|rack\.protection`, "Rack", 65, "Rack::Protection response"),
 	bs("body.hanami", `<title>Hanami \|[^<]*</title>|Hanami::(?:Router|Action|View|Controller)`, "Hanami", 75, "Hanami framework page"),
 	bs("body.padrino", `Padrino::(?:Application|Routing|Rendering)|padrino-framework`, "Padrino", 70, "Padrino framework page"),
@@ -240,9 +259,9 @@ var bodySigs = []bodySig{
 	bs("body.grape", `Grape::(?:Exceptions|API|Endpoint)`, "Grape", 70, "Grape API framework error"),
 
 	// --- App servers ---
-	bs("body.puma-error", `Puma caught this error`, "", 85, "Puma low-level error page"),
+	bs("body.puma-error", `Puma caught this error|An unhandled lowlevel error occurred\. The application logs may have details\.`, "", 85, "Puma low-level error page"),
 	bs("body.webrick-error", `(?i)<address>\s*WEBrick/[\d.]+ \(Ruby/\d+\.\d+\.\d+`, "", 90, "WEBrick error page signature (leaks the Ruby version)"),
-	bs("body.passenger-error", `Web application could not be started|This error page was generated by Phusion Passenger|Phusion Passenger(?:&reg;|®|\(R\))? is a web server and application server|id=["']passenger`, "", 35, "Phusion Passenger error page"),
+	bs("body.passenger-error", `Web application could not be started|This error page was generated by Phusion Passenger|Phusion Passenger(?:&reg;|®|\(R\))? is a web server and application server|id=["']passenger|Incomplete response received from application|The issue has been logged for investigation\. Please try again later\.`, "", 35, "Phusion Passenger error page"),
 	bs("body.unicorn-error", `unicorn (?:master|worker)\b`, "", 55, "Unicorn process name in the response"),
 
 	// --- Tools, dashboards ---

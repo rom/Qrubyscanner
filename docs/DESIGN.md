@@ -168,6 +168,17 @@ always explainable, and each distinct signal is counted once.
   both array and hash. Rack's query parser rejects that, and Rails/Sinatra
   answer 400; other stacks accept it. It only counts when the plain request
   succeeded and the 400 differs from the soft-404 baseline.
+- **Request-id sanitisation**: the parameter probe carries a crafted
+  `X-Request-Id`; ActionDispatch::RequestId echoes it with everything but word
+  characters, `-` and `@` removed. A verbatim echo or a fresh id does not count.
+- **Unknown HTTP method**: Puma answers a bare, empty `501` before the
+  application runs, which identifies the app server even on a hardened
+  production deployment; Rails behind other servers answers `405`.
+- Generator defaults: Rails' `icon.svg` and `406-unsupported-browser.html`
+  (Rails ≥ 7.2), an empty `favicon.ico` (Rails ≤ 7.1).
+- Middleware traces: `Server-Timing` event names (`*.action_controller`),
+  a UUID `X-Request-Id` with `X-Runtime`, Rack 3's lower-case cookie
+  attributes, Sinatra's default header set.
 - Sinatra's bare `<h1>Not Found</h1>` with `X-Cascade: pass`.
 - The guaranteed-404 response is analysed like any other body, and doubles as
   the soft-404 baseline that gates behavioural signals on catch-all servers.

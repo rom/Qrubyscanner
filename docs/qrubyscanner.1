@@ -54,7 +54,7 @@ A URL target's scheme, port and path are honoured and override the port set.
 .SH OPTIONS
 .TP
 .BI \-\-mode " detect|deep"
-Scan depth. \fBdetect\fR (default) only decides whether a service is Ruby;
+Scan depth (default \fBdeep\fR). \fBdetect\fR only decides whether a service is Ruby;
 \fBdeep\fR additionally fingerprints version, frameworks, gems, app server and
 correlates vulnerabilities.
 .TP
@@ -287,7 +287,7 @@ The scan completed but a \fB\-\-fail\-on\fR gate matched.
 .SH EXAMPLES
 .TP
 Is this service Ruby?
-.B qrubyscanner example.com
+.B qrubyscanner \-\-mode detect example.com
 .TP
 Deep scan with a PDF report:
 .B qrubyscanner \-\-mode deep \-\-report\-out report.pdf example.com
