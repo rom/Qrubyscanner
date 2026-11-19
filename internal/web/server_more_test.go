@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,7 +51,7 @@ func TestHistoryAndScopedDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Drain the stream so the result is stored.
-	_, _ = http.MaxBytesReader(nil, resp.Body, 1<<20).Read(make([]byte, 1<<20))
+	_, _ = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	resp.Body.Close()
 
 	hr, err := http.Get(srv.URL + "/api/history")

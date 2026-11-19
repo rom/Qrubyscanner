@@ -25,8 +25,13 @@ type Input struct {
 	// mmh3 fingerprint hash.
 	Favicon *probe.Response
 	// ParamProbe is the response to ParamTypeProbe (deep mode): a 400 where
-	// the plain request succeeded is Rack's query-parser behaviour.
+	// the plain request succeeded is Rack's query-parser behaviour. The same
+	// request carries X-Request-Id: RequestIDProbeValue, so its echo is
+	// checked for ActionDispatch::RequestId's sanitisation.
 	ParamProbe *probe.Response
+	// MethodProbe is the response to a request using UnknownMethodProbe
+	// (deep mode), used to recognise Puma and Rails method handling.
+	MethodProbe *probe.Response
 	// Control is the response to a guaranteed-nonexistent URL (deep mode). It
 	// serves two purposes: its body is analysed like any other (framework 404
 	// pages are highly characteristic), and it is the soft-404 baseline — a
@@ -70,6 +75,7 @@ var (
 	reGHESVersion    = regexp.MustCompile(`"installed_version"\s*:\s*"(\d+\.\d+\.\d+)"`)
 	reGitLabHelp     = regexp.MustCompile(`GitLab\s+(?:Community|Enterprise) Edition\s+(?:<[^>]+>\s*)*v?(\d+\.\d+\.\d+)`)
 	reDiscourseGen   = regexp.MustCompile(`(?i)Discourse (\d+(?:\.\d+){1,2}(?:\.beta\d+)?)`)
+	reUUID           = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	reLeadingVersion = regexp.MustCompile(`^(\d+(?:\.\d+){1,3})`)
 )
 
@@ -100,6 +106,7 @@ type analysis struct {
 	comp        map[string]compVersion // component name -> best version
 	observed    map[string]string      // gem name -> version, from backtrace paths
 	env         string
+	pumaMethod  bool // the unknown-method probe behaved like Puma
 }
 
 type compVersion struct{ ver, src string }
@@ -301,7 +308,52 @@ func Analyze(in Input) *Detection {
 		}
 	}
 
+	// --- Request-id sanitisation (rides on the parameter probe) -------------
+	if p := in.ParamProbe; p != nil && p.Err == "" {
+		switch got := strings.TrimSpace(p.HeaderGet("X-Request-Id")); got {
+		case RequestIDProbeEcho:
+			a.addEv(Evidence{
+				Signal: "behavior.rails-request-id", Source: p.RequestURL, Weight: 60,
+				Detail:  "A client-supplied X-Request-Id is echoed back sanitised exactly as ActionDispatch::RequestId does (only word characters, '-' and '@' kept)",
+				Pattern: "X-Request-Id: " + RequestIDProbeValue, Snippet: "X-Request-Id: " + got, Status: p.Status,
+			})
+			a.addFw("Rails")
+		}
+	}
+
+	// --- Unknown-method behavioural probe -----------------------------------
+	if m := in.MethodProbe; m != nil && m.Err == "" {
+		a.analyzeResponse(m, m.RequestURL)
+		rootOK := in.Root.Status > 0 && in.Root.Status < 400
+		ctrlStatus := 0
+		if in.Control != nil {
+			ctrlStatus = in.Control.Status
+		}
+		switch {
+		case m.Status == 501 && len(m.Body) == 0 && rootOK && ctrlStatus != 501:
+			a.pumaMethod = true
+			a.addEv(Evidence{
+				Signal: "behavior.puma-unknown-method", Source: m.RequestURL, Weight: 30,
+				Detail:  "An unknown HTTP method is answered with a bare 501 and an empty body, as Puma does before consulting the application",
+				Pattern: UnknownMethodProbe + " /", Status: m.Status,
+			})
+		case m.Status == 405 && rootOK && ctrlStatus != 405 && a.fwSet["Rails"]:
+			a.addEv(Evidence{
+				Signal: "behavior.rails-unknown-method", Source: m.RequestURL, Weight: 20,
+				Detail:  "An unknown HTTP method is answered with 405 (ActionController::UnknownHttpMethod behaviour)",
+				Pattern: UnknownMethodProbe + " /", Status: m.Status,
+			})
+		}
+	}
+
 	// --- Favicon fingerprint (deep mode) ------------------------------------
+	// Rails generators up to 7.1 ship an empty public/favicon.ico.
+	if f := in.Favicon; f != nil && f.Err == "" && f.Status == 200 && len(f.Body) == 0 && !ctrl.matches(f) {
+		a.addEv(Evidence{
+			Signal: "behavior.empty-favicon", Source: f.FinalURL, Weight: 15, Status: f.Status,
+			Detail: "favicon.ico is served as an empty file (the Rails generator default up to Rails 7.1)",
+		})
+	}
 	if in.Favicon != nil && in.Favicon.Err == "" && in.Favicon.Status == 200 && len(in.Favicon.Body) > 0 {
 		d.FaviconHash = faviconHash(in.Favicon.Body)
 		if entry, ok := faviconLookup(d.FaviconHash); ok {
@@ -684,6 +736,33 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 	}
 	a.headerHeuristics(resp, source, addEv)
 
+	// ActionDispatch::RequestId (a UUID request id) together with
+	// Rack::Runtime is the stock Rails middleware pair.
+	if reUUID.MatchString(strings.TrimSpace(resp.HeaderGet("X-Request-Id"))) && reXRuntime.MatchString(strings.TrimSpace(resp.HeaderGet("X-Runtime"))) {
+		addEv(Evidence{
+			Signal: "header.rails-request-id", Source: source, Weight: 15,
+			Detail: "UUID X-Request-Id alongside X-Runtime (ActionDispatch::RequestId + Rack::Runtime)",
+			Where:  "response headers 'X-Request-Id' + 'X-Runtime'", How: "header combination",
+			Snippet: "X-Request-Id: " + resp.HeaderGet("X-Request-Id"), Probe: source,
+		})
+	}
+
+	// Sinatra's default headers: Rack::Protection's trio plus its
+	// characteristic "text/html;charset=utf-8" (no space after the semicolon).
+	if resp.HeaderGet("Content-Type") == "text/html;charset=utf-8" &&
+		strings.EqualFold(resp.HeaderGet("X-Frame-Options"), "SAMEORIGIN") &&
+		strings.EqualFold(resp.HeaderGet("X-Content-Type-Options"), "nosniff") &&
+		resp.HeaderGet("X-XSS-Protection") == "1; mode=block" {
+		// Other stacks can be configured to send the same set, so this is
+		// supporting evidence only.
+		addEv(Evidence{
+			Signal: "header.sinatra-defaults", Source: source, Weight: 20,
+			Detail: "Sinatra default response headers (Rack::Protection set with Content-Type text/html;charset=utf-8)",
+			Where:  "response headers", How: "header combination",
+			Snippet: "Content-Type: text/html;charset=utf-8", Probe: source,
+		})
+	}
+
 	// Sinatra's production not-found reply: the router falls through
 	// (X-Cascade: pass) and the body is exactly "<h1>Not Found</h1>".
 	if resp.Status == 404 && strings.EqualFold(resp.HeaderGet("X-Cascade"), "pass") &&
@@ -722,7 +801,13 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 				how = "cookie-name suffix match"
 			}
 			signal := "cookie." + strings.ToLower(strings.Trim(sig.name, "_-"))
-			if sig.kind == matchSuffix {
+			if strings.HasPrefix(sig.name, "ahoy_") {
+				signal = "cookie.ahoy" // the visit and visitor cookies count once
+				a.addGem("ahoy_matey")
+			}
+			if sig.kind == matchSuffix && strings.HasPrefix(sig.name, ".") {
+				signal = "cookie.rack-session-name"
+			} else if sig.kind == matchSuffix {
 				signal = "cookie.rails-session-name"
 			}
 			addEv(Evidence{
@@ -748,7 +833,15 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 	// Secret-bearing files (keys, credentials, logs) are still matched, but
 	// their content is never quoted into evidence.
 	withhold := resp.Status == 200 && sensitivePath(source)
+	prose := resp.Status < 400 && looksLikeProse(body)
+	phoenix := looksPhoenix(resp, body)
 	for _, sig := range bodySigs {
+		if sig.errorOnly && prose {
+			continue
+		}
+		if phoenix && (sig.id == "body.asset-digest-weak" || sig.id == "body.rails-asset-digest") {
+			continue
+		}
 		if loc := sig.re.FindStringIndex(body); loc != nil {
 			snippet, line := bodyContext(body, loc[0], loc[1])
 			if withhold {
@@ -775,6 +868,14 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 		}
 	}
 	a.bodyVersions(body, source)
+	if n := hamlQuoteCount(body); n > 0 {
+		addEv(Evidence{
+			Signal: "body.haml-quoting", Source: source, Weight: 20,
+			Detail: fmt.Sprintf("HTML attributes are consistently single-quoted (%d of them) — the output style of Haml templates", n),
+			Where:  "response body", How: "attribute-quoting statistics", Probe: source,
+		})
+		a.addGem("haml")
+	}
 
 	if m := rePoweredBy.FindStringSubmatch(body); m != nil {
 		a.addFw(canonicalApp(m[1]))
@@ -838,6 +939,17 @@ func (a *analysis) headerHeuristics(resp *probe.Response, source string, addEv f
 	}
 	if v := resp.HeaderGet("Foreman_version"); v != "" {
 		a.setComp("Foreman", v, "Foreman_version header")
+	}
+
+	// Phoenix (Elixir) copied Rails' default Cache-Control and secure-browser
+	// headers, so those combinations prove nothing on a Phoenix response.
+	if looksPhoenix(resp, resp.BodyString()) {
+		addEv(Evidence{
+			Signal: "stack.phoenix", Source: source, Weight: 0,
+			Detail: "Phoenix (Elixir) markers present — Rails-like default headers on this response are not counted",
+			Where:  "response headers / cookies / body", How: "negative fingerprint", Probe: source,
+		})
+		return
 	}
 
 	// Rack::ETag weak validator together with Rails' default Cache-Control.
@@ -1050,6 +1162,11 @@ func (a *analysis) detectExposures(u string, resp *probe.Response, body string) 
 			a.setEnv("development")
 			ev("diag.rails-routes", 85, "/rails/info/routes is publicly exposed (development-mode route listing)", "route table")
 		}
+	case lu == "/icon.svg":
+		if len(body) < 300 && strings.Contains(body, `<circle cx="256" cy="256" r="256" fill="red"/>`) {
+			a.addFw("Rails")
+			ev("diag.rails-default-icon", 55, "Rails generator default icon.svg (red circle — Rails 7.2 or later)", "icon.svg")
+		}
 	case lu == "/up":
 		if len(body) < 400 && strings.Contains(body, "background-color: green") {
 			a.addFw("Rails")
@@ -1186,7 +1303,7 @@ func (a *analysis) inferAppServer(inv *BundlerInventory) string {
 	switch {
 	case a.seen["body.webrick-error"]:
 		return withVer("WEBrick")
-	case a.seen["body.puma-error"]:
+	case a.seen["body.puma-error"], a.pumaMethod:
 		return withVer("Puma")
 	case a.seen["stack.passenger"] || a.seen["body.passenger-error"] || a.modSet["Phusion Passenger"]:
 		return withVer("Phusion Passenger")
@@ -1228,7 +1345,10 @@ func cookieMatch(name string, sig cookieSig) bool {
 		return strings.HasPrefix(n, s)
 	case matchSuffix:
 		// The Rails convention is `_<app>_session`: leading underscore required.
-		return strings.HasPrefix(n, "_") && strings.HasSuffix(n, s) && len(n) > len(s)+1
+		if strings.HasPrefix(s, "_") && !strings.HasPrefix(n, "_") {
+			return false
+		}
+		return strings.HasSuffix(n, s) && len(n) > len(s)+1
 	default:
 		return n == s
 	}
@@ -1302,6 +1422,84 @@ func partitionAddons(frameworks []string) (fw, addons []string) {
 		}
 	}
 	return fw, addons
+}
+
+var (
+	rePhoenixCookie = regexp.MustCompile(`^_[a-z0-9_]+_key$`)
+	rePhoenixReqID  = regexp.MustCompile(`^[A-Za-z0-9_-]{16,24}$`)
+)
+
+// looksPhoenix reports markers of the Phoenix framework (Elixir), whose
+// defaults deliberately mirror Rails': the same Cache-Control, the same secure
+// headers and MD5-digested /assets/ files. It differs in its session cookie
+// (_<app>_key), its request ids (a short base64 token, not a UUID), the
+// absence of X-Runtime, and LiveView's phx- attributes.
+func looksPhoenix(resp *probe.Response, body string) bool {
+	if resp == nil {
+		return false
+	}
+	for _, c := range resp.Cookies {
+		if rePhoenixCookie.MatchString(strings.ToLower(c.Name)) {
+			return true
+		}
+	}
+	if id := strings.TrimSpace(resp.HeaderGet("X-Request-Id")); id != "" && resp.HeaderGet("X-Runtime") == "" &&
+		rePhoenixReqID.MatchString(id) && !reUUID.MatchString(id) && strings.ToLower(id) != id {
+		return true
+	}
+	return strings.Contains(body, "phx-track-static") || strings.Contains(body, "data-phx-") || strings.Contains(body, " phx-")
+}
+
+// looksLikeProse reports a page that is documentation, a blog post or a Q&A
+// thread — content that quotes class names and error messages as text.
+func looksLikeProse(body string) bool {
+	if len(body) < 2048 {
+		return false
+	}
+	return strings.Contains(body, "<code") || strings.Contains(body, "<article") || strings.Contains(body, "<pre") ||
+		strings.Contains(body, "<p>") || strings.Contains(body, "<nav")
+}
+
+var (
+	reAttrSingle = regexp.MustCompile(`\s[a-zA-Z-]+='[^'<>]*'`)
+	reAttrDouble = regexp.MustCompile(`\s[a-zA-Z-]+="[^"<>]*"`)
+)
+
+// hamlQuoteCount returns the number of single-quoted HTML attributes when a
+// document's markup is quoted the way Haml emits it (attributes wrapped in
+// single quotes), or 0. Hand-written and most generated HTML uses double
+// quotes, so a document that is overwhelmingly single-quoted is a mild Ruby
+// indicator. Only the document head and first tags are examined, and inline
+// scripts — where single quotes are ordinary — are skipped.
+func hamlQuoteCount(body string) int {
+	if len(body) > 16384 {
+		body = body[:16384]
+	}
+	if !strings.Contains(body, "<html") && !strings.Contains(body, "<head") {
+		return 0
+	}
+	var b strings.Builder
+	rest := body
+	for {
+		i := strings.Index(rest, "<script")
+		if i < 0 {
+			b.WriteString(rest)
+			break
+		}
+		b.WriteString(rest[:i])
+		j := strings.Index(rest[i:], "</script>")
+		if j < 0 {
+			break
+		}
+		rest = rest[i+j+len("</script>"):]
+	}
+	markup := b.String()
+	single := len(reAttrSingle.FindAllStringIndex(markup, 400))
+	double := len(reAttrDouble.FindAllStringIndex(markup, 400))
+	if single >= 20 && single >= 6*double {
+		return single
+	}
+	return 0
 }
 
 // ctrlSig is a fingerprint of the soft-404 / catch-all baseline response (the

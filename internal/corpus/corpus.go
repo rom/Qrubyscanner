@@ -50,13 +50,14 @@ type Response struct {
 // Service is one scanned endpoint's captured detection inputs — the exact
 // responses that were fed to ruby.Analyze, keyed as that Input holds them.
 type Service struct {
-	Target     string               `json:"target"`
-	Deep       bool                 `json:"deep,omitempty"`
-	Root       *Response            `json:"root,omitempty"`
-	Extra      map[string]*Response `json:"extra,omitempty"`
-	Favicon    *Response            `json:"favicon,omitempty"`
-	ParamProbe *Response            `json:"param_probe,omitempty"`
-	Control    *Response            `json:"control,omitempty"`
+	Target      string               `json:"target"`
+	Deep        bool                 `json:"deep,omitempty"`
+	Root        *Response            `json:"root,omitempty"`
+	Extra       map[string]*Response `json:"extra,omitempty"`
+	Favicon     *Response            `json:"favicon,omitempty"`
+	ParamProbe  *Response            `json:"param_probe,omitempty"`
+	MethodProbe *Response            `json:"method_probe,omitempty"`
+	Control     *Response            `json:"control,omitempty"`
 }
 
 // Corpus is a saved set of per-service detection inputs plus provenance.
@@ -179,6 +180,7 @@ func (s *Service) sanitize() {
 	sanitizeResponse(s.Root)
 	sanitizeResponse(s.Favicon)
 	sanitizeResponse(s.ParamProbe)
+	sanitizeResponse(s.MethodProbe)
 	sanitizeResponse(s.Control)
 	for _, r := range s.Extra {
 		sanitizeResponse(r)

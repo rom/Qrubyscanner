@@ -153,7 +153,7 @@ type DNSResolver interface {
 // withDefaults fills unset options with sensible values.
 func (o Options) withDefaults() Options {
 	if o.Mode == "" {
-		o.Mode = ModeDetect
+		o.Mode = ModeDeep
 	}
 	if o.TLSMode == "" {
 		o.TLSMode = TLSAuto
@@ -593,9 +593,13 @@ func scanService(ctx context.Context, fetcher *probe.Fetcher, j job, opts Option
 	// and Ruby version leakage.
 	var fpExtra []*probe.Response
 	var notFound *probe.Response
+	// The not-found page is requested in every mode: many real deployments
+	// serve their front page from a CDN, a static site or a JavaScript front
+	// end, and only show the Ruby application (X-Runtime, Rails default
+	// headers, framework 404 pages) on a path the application itself routes.
+	notFound = fetcher.Get(ctx, base+"/qrubyscanner_probe_404")
 	if opts.Mode == ModeDeep {
 		fpExtra = append(fpExtra, fetcher.Request(ctx, "OPTIONS", base+"/"))
-		notFound = fetcher.Get(ctx, base+"/qrubyscanner_probe_404")
 		fpExtra = append(fpExtra, notFound)
 		for _, p := range serverStatusPaths() {
 			fpExtra = append(fpExtra, fetcher.Get(ctx, base+p))
@@ -614,6 +618,7 @@ func scanService(ctx context.Context, fetcher *probe.Fetcher, j job, opts Option
 		Root:         root,
 		Catalog:      opts.Catalog,
 		BundlerFiles: opts.BundlerFiles,
+		Control:      notFound,
 	}
 	if in.Deep {
 		in.Extra = map[string]*probe.Response{}
@@ -631,7 +636,11 @@ func scanService(ctx context.Context, fetcher *probe.Fetcher, j job, opts Option
 		}
 		// Phase 1 — core Ruby signals, always collected.
 		in.Favicon = get(base + ruby.FaviconPath)
-		in.ParamProbe = get(base + ruby.ParamTypeProbe)
+		spent++
+		in.ParamProbe = fetcher.RequestWithHeaders(ctx, "GET", base+ruby.ParamTypeProbe,
+			map[string]string{"X-Request-Id": ruby.RequestIDProbeValue})
+		spent++
+		in.MethodProbe = fetcher.Request(ctx, ruby.UnknownMethodProbe, base+"/")
 
 		// If the host is rate-limiting (429/503, honouring any Retry-After by
 		// backing off rather than hammering), skip the optional discovery probes.
@@ -685,12 +694,13 @@ func finalizeService(res ServiceResult, in ruby.Input, opts Options, start time.
 // serialisable, sanitised corpus entry.
 func corpusService(target string, in ruby.Input) corpus.Service {
 	s := corpus.Service{
-		Target:     target,
-		Deep:       in.Deep,
-		Root:       corpus.FromResponse(in.Root),
-		Favicon:    corpus.FromResponse(in.Favicon),
-		ParamProbe: corpus.FromResponse(in.ParamProbe),
-		Control:    corpus.FromResponse(in.Control),
+		Target:      target,
+		Deep:        in.Deep,
+		Root:        corpus.FromResponse(in.Root),
+		Favicon:     corpus.FromResponse(in.Favicon),
+		ParamProbe:  corpus.FromResponse(in.ParamProbe),
+		MethodProbe: corpus.FromResponse(in.MethodProbe),
+		Control:     corpus.FromResponse(in.Control),
 	}
 	if len(in.Extra) > 0 {
 		s.Extra = make(map[string]*corpus.Response, len(in.Extra))

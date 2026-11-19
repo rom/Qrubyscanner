@@ -153,7 +153,7 @@ func TestHelpers(t *testing.T) {
 	if got := cleanTargets([]string{" a ", "", "b"}); len(got) != 2 {
 		t.Fatalf("cleanTargets: %v", got)
 	}
-	if normMode("deep") != "deep" || normMode("x") != "detect" {
+	if normMode("deep") != "deep" || normMode("detect") != "detect" || normMode("x") != "deep" || normMode("") != "deep" {
 		t.Fatal("normMode")
 	}
 	if normTLS("on") != "on" || normTLS("off") != "off" || normTLS("x") != "auto" {

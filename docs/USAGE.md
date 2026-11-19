@@ -100,18 +100,30 @@ self-signed or otherwise invalid certificates.
 
 ## Scan depth: detect vs deep
 
-- `--mode detect` (default) — decide **whether** each service is Ruby and record
-  the evidence. Fast; one request per service (plus security.txt).
-- `--mode deep` — additionally fetch a small set of read-only probe paths
+- `--mode detect` — decide **whether** each service is Ruby and record
+  the evidence. Fast; two requests per service (the page, and one path that
+  cannot exist — many deployments only reveal the Ruby application on a path
+  it routes itself), plus security.txt.
+- `--mode deep` (default) — additionally fetch a small set of read-only probe paths
   (`/rails/info/properties`, `/up`, the Rails static error pages,
-  `/Gemfile.lock`, `/.ruby-version`, `/config.ru`, …), a guaranteed-404 and one
-  behavioural probe of Rack's query parser, to fingerprint the **Ruby
+  `/Gemfile.lock`, `/.ruby-version`, `/config.ru`, …), a guaranteed-404 and
+  three behavioural probes (Rack's query parser, `X-Request-Id` sanitisation,
+  an unknown HTTP method), to fingerprint the **Ruby
   version**, **variant** (CRuby / JRuby / TruffleRuby), **frameworks**,
   **gems**, **app server**, end-of-life status, and to correlate **known
   version-based vulnerabilities** — including
   [Ruby2Shell](#ruby2shell-ghsa-34m4-m9fh-gqp5).
 
-All probes are GET requests; nothing is submitted and nothing is exploited.
+All probes are body-less, read-only requests (GET, one `OPTIONS`, and one with
+the made-up method `QRUBYSCAN`); nothing is submitted and nothing is exploited.
+
+The behavioural probes, each gated against the soft-404 baseline:
+
+| Probe | Ruby behaviour | Signal |
+| --- | --- | --- |
+| `/?p[]=1&p[k]=1` | Rack rejects a parameter declared as array *and* hash; Rails/Sinatra answer 400 | `behavior.rack-param-type` |
+| `X-Request-Id: qruby.scan!1-@probe_x` | Rails echoes it as `qrubyscan1-@probe_x` (only word characters, `-`, `@` kept) | `behavior.rails-request-id` |
+| `QRUBYSCAN /` | Puma answers a bare `501` with an empty body | `behavior.puma-unknown-method` |
 
 Deep discovery is **adaptive**: after the base and core responses, an
 application's probe paths (Rails dashboards, GitLab, Mastodon, Discourse,
@@ -622,7 +634,7 @@ A one-line summary is printed to stderr after each scan.
 
 ```sh
 # Minimal: is it Ruby?
-qrubyscanner example.com
+qrubyscanner --mode detect example.com
 
 # Deep scan with a PDF report
 qrubyscanner --mode deep --report-out audit.pdf https://example.com

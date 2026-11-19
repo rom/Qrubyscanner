@@ -22,8 +22,29 @@ behaviour, and replaces the detection core with a Ruby one.
   Ruby backtraces and exception messages, Rails / Sinatra / Rack / Hanami /
   Padrino / Roda / Grape pages, and ~30 Ruby applications (GitLab, Discourse,
   Mastodon, Redmine, OpenProject, Chatwoot, …).
-- **Behavioural probe** of Rack's query parser (a parameter declared as both
-  array and hash is rejected with 400), gated against the soft-404 baseline.
+- **Behavioural probes**, gated against the soft-404 baseline: Rack's query
+  parser (a parameter declared as both array and hash is rejected with 400),
+  `X-Request-Id` sanitisation (ActionDispatch::RequestId), and an unknown HTTP
+  method (Puma's bare 501, which also identifies the app server).
+- **More passive evidence**: Rails generator defaults (`icon.svg`,
+  `406-unsupported-browser.html`, empty `favicon.ico`), `Server-Timing` event
+  names, Rack 3 cookie-attribute casing, Sinatra's default header set,
+  web-console / meta_request / Turbolinks headers, Rails JSON and XML error
+  bodies, the HostAuthorization "Blocked host" page, turbo-rails stream
+  sources, importmap pins, I18n and Devise messages, Rack::Files /
+  Rack::URLMap / Rack::Attack replies, Puma and Passenger production errors.
+- **The not-found page is analysed in every mode**, and deep mode also
+  requests `/users/sign_in` and `/session/new`: real deployments frequently
+  serve a static or cached front page and only show the application on paths
+  it routes itself.
+- **Evidence tuned against ~130 public sites**: Ahoy cookies, SHA-digested
+  assets of any type, Haml attribute quoting, the Rails 3 `X-UA-Compatible`
+  header; and guards against the false positives that survey exposed —
+  Phoenix (Elixir) look-alike headers, class names quoted in documentation,
+  short asset digests, GitHub Pages hosting, marketing pages naming a product.
+- **Deep is the default scan depth**; `--mode detect` limits a scan to the
+  yes/no verdict with two requests per service.
+- A GitHub Actions workflow running `make check`.
 - **Ruby version discovery** from `/rails/info/properties`, WEBrick banners and
   error-page footers, the Rails welcome page, `ruby -v` strings, exposed
   `.ruby-version` / `.tool-versions` / `Gemfile.lock`, version-manager paths,
