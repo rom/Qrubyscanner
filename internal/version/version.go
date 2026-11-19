@@ -9,7 +9,7 @@ var (
 	Name = "qrubyscanner"
 
 	// Version is the semantic version of the build.
-	Version = "1.0.0"
+	Version = "0.1.0"
 
 	// Commit is the VCS revision the binary was built from (optional).
 	Commit = "dev"
