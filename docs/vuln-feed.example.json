@@ -1,0 +1,56 @@
+{
+  "schema": "qrubyscanner-vuln-feed/1",
+  "generated": "2026-11-19",
+
+  "_comment": "External vulnerability feed for qrubyscanner. Load with --vuln-feed <file-or-url> (repeatable). Entries are MERGED on top of the built-in catalogue; EOL dates override by branch. A version matches an entry when ANY of its 'affected' ranges match. Within a range, every populated bound must hold: 'branch' pins a major.minor; 'introduced' is an inclusive lower bound; 'fixed'/'lt' are exclusive upper bounds; 'eq' is one exact version. Versions may have four components (7.0.8.1) or a Ruby patch level (2.0.0p594). 'ruby' entries apply to CRuby; 'cms' is keyed by framework / application / stack component (rails, rack, sinatra, gitlab, mastodon, passenger ...); 'packages' is keyed by gem name.",
+
+  "ruby": [
+    {
+      "id": "CVE-2099-XXXXX",
+      "severity": "critical",
+      "title": "Example Ruby core issue",
+      "description": "A longer description of the issue.",
+      "reference": "https://www.ruby-lang.org/en/security/",
+      "note": "only relevant to a specific configuration",
+      "affected": [
+        { "branch": "3.3", "lt": "3.3.99" },
+        { "branch": "3.4", "lt": "3.4.99" },
+        { "lt": "3.3.0" }
+      ],
+      "prereqs": [
+        { "kind": "framework", "want": "rails|sinatra", "detail": "reachable through the framework's default request handling" }
+      ],
+      "alert_unknown_version": false
+    }
+  ],
+
+  "cms": {
+    "rails": [
+      {
+        "id": "CVE-2099-YYYYY",
+        "severity": "high",
+        "title": "Example Rails issue",
+        "reference": "https://rubyonrails.org/category/security",
+        "affected": [{ "introduced": "7.0.0", "fixed": "7.2.2.9" }],
+        "prereqs": [{ "kind": "env", "want": "development" }]
+      }
+    ]
+  },
+
+  "packages": {
+    "puma": [
+      {
+        "id": "CVE-2099-ZZZZZ",
+        "severity": "medium",
+        "title": "Example gem issue",
+        "affected": [{ "lt": "6.9.9" }],
+        "prereqs": [{ "kind": "app-server", "want": "puma" }]
+      }
+    ]
+  },
+
+  "eol": {
+    "3.3": "2027-03-31",
+    "3.4": "2028-03-31"
+  }
+}

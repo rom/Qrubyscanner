@@ -1,0 +1,318 @@
+.\" Manpage for qrubyscanner.
+.TH QRUBYSCANNER 1 "2026-10-21" "qrubyscanner 0.1.0" "User Commands"
+.SH NAME
+qrubyscanner \- detect Ruby-backed network services, collect evidence and report
+.SH SYNOPSIS
+.B qrubyscanner
+[\fIoptions\fR] \fItarget\fR [\fItarget\fR ...]
+.br
+.B qrubyscanner
+\fB\-\-web\fR [\fB\-\-listen\fR \fIhost:port\fR]
+.br
+.B qrubyscanner
+\fB\-\-config\fR \fIfile.yaml\fR
+.SH DESCRIPTION
+.B qrubyscanner
+scans network ports and HTTP(S) services to determine whether they are built
+on Ruby, collects the supporting evidence, and produces machine output and
+human-readable reports.
+It is a passive fingerprinting tool: it reads banners, headers, cookies and
+response bodies and reasons about them.
+In
+.B deep
+mode it also fingerprints the Ruby version and variant, enumerates frameworks, gems
+and server modules, evaluates end-of-life status, and correlates known
+version-based vulnerabilities.
+It never attempts to exploit anything.
+.PP
+It also discovers and parses a published RFC 9116
+.I security.txt
+and includes it in all output and reports.
+.PP
+Only scan hosts and networks you own or are explicitly authorised to test.
+.SH TARGETS
+Each target may be a URL
+.RB ( https://example.com/ ),
+an IPv4 or IPv6 literal
+.RB ( 203.0.113.10 ,
+.BR 2001:db8::1 ),
+a CIDR block
+.RB ( 10.0.0.0/24 ),
+a dashed range
+.RB ( 192.168.1.10-20 ,
+.BR 10.0.0.1-10.0.0.50 ,
+.BR 2001:db8::1-2001:db8::ff ),
+a wildcard
+.RB ( 192.168.1.* ,
+.BR 10.0.*.* ,
+.BR 2001:db8::* ),
+a DNS wildcard
+.RB ( *.example.com ,
+which enumerates subdomains via Certificate Transparency),
+or a hostname.
+A URL target's scheme, port and path are honoured and override the port set.
+.SH OPTIONS
+.TP
+.BI \-\-mode " detect|deep"
+Scan depth. \fBdetect\fR (default) only decides whether a service is Ruby;
+\fBdeep\fR additionally fingerprints version, frameworks, gems, app server and
+correlates vulnerabilities.
+.TP
+.BI \-\-ports " spec"
+Ports to check: a single port, a comma-separated list, inclusive ranges, or a
+mixture (e.g. \fB80,443,8000-8100\fR). Default: a built-in common-web-port set.
+.TP
+.BI \-\-tls " auto|on|off"
+TLS handling. \fBauto\fR (default) infers from the port and falls back to the
+other scheme; \fBon\fR forces HTTPS; \fBoff\fR forces HTTP.
+.TP
+.BI \-\-format " text|json|xml|csv|sarif|ndjson"
+Machine-readable scan output format (default \fBtext\fR).
+.TP
+.BI \-\-out " file"
+Write scan output to \fIfile\fR instead of standard output.
+.TP
+.BI \-\-report " text|rtf|pdf|html"
+Also produce a human-readable report in the given format.
+.TP
+.BI \-\-report\-out " file"
+Write the report to \fIfile\fR (required for \fBrtf\fR and \fBpdf\fR).
+.TP
+.BI \-\-timeout " duration"
+Per-connection timeout, e.g. \fB5s\fR or \fB500ms\fR (default \fB10s\fR).
+.TP
+.BI \-\-concurrency " n"
+Maximum concurrent service probes (default \fB50\fR).
+.TP
+.B \-\-follow
+Follow HTTP redirects while collecting evidence (default \fBtrue\fR).
+.TP
+.B \-\-insecure
+Do not verify TLS certificates.
+.TP
+.B \-\-security\-txt
+Look up and parse /.well-known/security.txt (default \fBtrue\fR).
+.TP
+.B \-\-include\-closed
+Include closed/filtered ports in the output.
+.TP
+.B \-\-verbose ", " \-v
+Print a line per host/port as it is probed (open/closed, Ruby verdict, version),
+plus subdomain-enumeration steps.
+.TP
+.B \-\-quiet ", " \-q
+Suppress progress output.
+.TP
+.B \-\-no\-dns\-enum
+Disable subdomain enumeration for \fB*.domain\fR targets.
+.TP
+.B \-\-verify\-subdomains
+Keep only enumerated subdomains that resolve in DNS.
+.TP
+.BI \-\-targets\-file " file" ", " \-iL " file"
+Read targets from a file, one per line ('-' for stdin). Blank lines and
+'#' comments are ignored.
+.TP
+.B \-\-resolve\-dns
+Record forward and reverse (PTR) DNS for each host.
+.TP
+.B \-\-banners
+Grab a short service banner from open ports that do not speak HTTP.
+.TP
+.BI \-\-rate " n"
+Cap outbound HTTP requests to n per second across the scan.
+.TP
+.BI \-\-per\-host\-concurrency " n"
+Limit concurrent probes against a single host.
+.TP
+.BI \-\-host\-concurrency " n"
+Limit how many distinct hosts are scanned at once (0 = no host-level cap).
+.TP
+.BI \-\-jitter " duration"
+Sleep a random time up to this before each service probe.
+.TP
+.BI \-\-retries " n"
+Retry transient network failures n times with backoff.
+.TP
+.BI \-\-request\-budget " n"
+Cap deep-mode probes per service. Core identification probes always run;
+optional application-discovery probes stop once the budget is spent (0 = no
+cap). Deep probing is adaptive: an application's endpoints are only requested
+after the base responses show evidence of that application, and a host
+returning 429/503 skips the optional probes.
+.TP
+.BI \-\-header " 'Name: value'"
+Add a request header (repeatable).
+.TP
+.BI \-\-cookie " value"
+Send a Cookie header.
+.TP
+.BI \-\-bearer " token"
+Send Authorization: Bearer token.
+.TP
+.BI \-\-basic " user:pass"
+HTTP Basic authentication.
+.TP
+.BI \-\-vhost " host"
+Override the Host header (virtual-host scanning).
+.TP
+.BI \-\-proxy " url"
+Route requests through an http(s):// or socks5:// proxy.
+.TP
+.BI \-\-resolve " host:port:addr"
+Pin
+.I host:port
+to dial
+.I addr
+instead (curl \-\-resolve style), keeping the URL host for the Host header and
+TLS SNI. Use it to reach an origin behind a CDN. Repeatable.
+.TP
+.BI \-\-sni " name"
+Override the TLS SNI server name, independent of the Host header. A name that
+does not match the presented certificate fails verification unless
+.B \-\-insecure
+is set.
+.TP
+.BI \-\-favicon\-catalog " file|url"
+Load a favicon-hash → product catalogue (JSON) to attribute matched site
+favicons. Repeatable.
+.TP
+.BI \-\-signature\-pack " file|url"
+Load a versioned detection-signature pack (JSON, schema
+\fBqrubyscanner-signature-pack/1\fR) adding response-header, cookie-name and
+response-body matchers to the built-in catalogues. Regular expressions are
+length-bounded and validated; weights are clamped. The active packs are
+recorded in the scan's provenance metadata. Repeatable, and honoured by the
+web GUI when passed at start-up.
+.TP
+.BI \-\-gemfile " file"
+Supply a local
+.IR Gemfile " or " Gemfile.lock
+(sniffed by content) to build the gem inventory for a project whose Bundler
+files are not web-exposed. The lockfile's RUBY VERSION section is used as a
+declared Ruby version and locked gems are correlated with advisories.
+Repeatable.
+.TP
+.BI \-\-allow " pattern"
+Keep only targets whose host matches \fIpattern\fR (an exact host/IP, a CIDR
+block, or a \fB*.domain\fR / \fB.domain\fR suffix). Repeatable.
+.TP
+.BI \-\-block " pattern"
+Drop targets whose host matches \fIpattern\fR (same forms as \fB\-\-allow\fR).
+Repeatable; applied after the allow list.
+.TP
+.BI \-\-vuln\-feed " file|url"
+Merge an external vulnerability feed (repeatable). The native
+qrubyscanner-vuln-feed schema, OSV records (single or array) and CSAF 2.0
+advisories are auto-detected.
+.TP
+.BI \-\-fail\-on " level"
+Exit with status 2 if a finding meets \fIlevel\fR: low, medium, high,
+critical or eol.
+.TP
+.BI \-\-oA " base"
+Write json/xml/csv/sarif/txt outputs and an HTML report to \fIbase\fR.*
+.TP
+.BI \-\-diff " file"
+Compare against a prior JSON scan result and print the differences.
+.TP
+.BI \-\-diff\-format " text|json"
+Format for \fB\-\-diff\fR output (default text).
+.TP
+.BI \-\-record\-corpus " file"
+Record a sanitised fixture of the scan's detection inputs (the responses fed
+to analysis) to \fIfile\fR for offline replay. Session-cookie values and
+credential headers are redacted; response bodies are kept verbatim as the
+fingerprinting material, so review a corpus before sharing it.
+.TP
+.BI \-\-replay\-corpus " file"
+Replay a corpus recorded with \fB\-\-record\-corpus\fR back through detection
+offline — no network and no targets — emitting a scan result exactly as a live
+run would. A regression harness: it reproduces the Ruby verdict, version,
+evidence and vulnerability leads from stored responses. Honours
+\fB\-\-vuln\-feed\fR, \fB\-\-signature\-pack\fR, \fB\-\-format\fR,
+\fB\-\-report\fR and \fB\-\-fail\-on\fR.
+.TP
+.BI \-\-resume " file"
+Checkpoint completed services to \fIfile\fR and resume from it.
+.TP
+.BI \-\-pcap " file"
+Write a libpcap capture of every HTTP exchange to \fIfile\fR, reconstructing
+each request/response as a TCP conversation for a full audit trail. The file
+opens in Wireshark, tcpdump or tshark.
+.TP
+.BI \-\-log " file"
+Write a human-readable session log to \fIfile\fR recording each request and,
+per service, how every piece of evidence and each verdict was decided.
+.TP
+.BI \-\-web\-auth " user:pass"
+Protect the web GUI with HTTP Basic authentication.
+.TP
+.BI \-\-config " file"
+Load settings from a YAML configuration file. Explicit flags override config
+values; positional targets override the config's target list.
+.TP
+.BI \-\-user\-agent " string"
+Override the HTTP User-Agent header.
+.TP
+.BI \-\-max\-hosts " n"
+Maximum hosts a single target spec may expand to.
+.TP
+.B \-\-web
+Run the web GUI instead of a one-shot scan.
+.TP
+.BI \-\-listen " host:port"
+Address for the web GUI (default \fB127.0.0.1:8088\fR).
+.TP
+.B \-\-version
+Print version information and exit.
+.TP
+.BI \-\-completion " shell"
+Print a shell completion script for \fIshell\fR (bash, zsh or fish) and exit.
+.SH OUTPUT
+The scan output (\fB\-\-format\fR) is a machine-readable record of every probed
+service in text, JSON or XML. A report (\fB\-\-report\fR) is a human-readable
+write-up in text, RTF or PDF. Both may be produced in a single run.
+.SH EXIT STATUS
+.TP
+.B 0
+The scan completed.
+.TP
+.B 1
+A fatal error occurred (invalid target or port spec, unreadable config/feed, or
+an I/O error).
+.TP
+.B 2
+The scan completed but a \fB\-\-fail\-on\fR gate matched.
+.SH EXAMPLES
+.TP
+Is this service Ruby?
+.B qrubyscanner example.com
+.TP
+Deep scan with a PDF report:
+.B qrubyscanner \-\-mode deep \-\-report\-out report.pdf example.com
+.TP
+Subnet sweep, HTTPS only, JSON to a file:
+.B qrubyscanner \-\-tls on \-\-format json \-\-out scan.json 10.0.0.0/28
+.TP
+Enumerate and scan subdomains with per-host detail:
+.B qrubyscanner \-\-verbose '*.example.com'
+.TP
+Deep scan with a full audit trail (PCAP capture and decision log):
+.B qrubyscanner \-\-mode deep \-\-pcap scan.pcap \-\-log scan.log example.com
+.TP
+Launch the web GUI:
+.B qrubyscanner \-\-web
+.SH FILES
+.TP
+.I config.example.yaml
+Annotated example configuration shipped with the source.
+.SH SEE ALSO
+Full documentation in
+.IR docs/USAGE.md " and " docs/DESIGN.md .
+.SH CAVEATS
+Vulnerability findings are leads correlated from the detected version only, not
+confirmed by exploitation; many require a specific framework, app server or configuration. When Ruby is detected but its version is not disclosed, an informational lead records that Ruby2Shell (GHSA-34m4-m9fh-gqp5) could not be ruled out.
+Always verify against the live service before acting.
+.SH AUTHORS
+qrubyscanner authors.
