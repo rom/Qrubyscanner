@@ -29,6 +29,14 @@ type Input struct {
 	// request carries X-Request-Id: RequestIDProbeValue, so its echo is
 	// checked for ActionDispatch::RequestId's sanitisation.
 	ParamProbe *probe.Response
+	// JSONErrorProbe is the response to the not-found path requested with
+	// "Accept: application/json" (deep mode). Rails' PublicExceptions answers
+	// with the body {"status":404,"error":"Not Found"}.
+	JSONErrorProbe *probe.Response
+	// AssetProbe is the response to AssetNotFoundProbe (deep mode): the
+	// Sprockets / Propshaft asset server answers a missing asset with a plain
+	// "Not found".
+	AssetProbe *probe.Response
 	// MethodProbe is the response to a request using UnknownMethodProbe
 	// (deep mode), used to recognise Puma and Rails method handling.
 	MethodProbe *probe.Response
@@ -65,18 +73,26 @@ var (
 	reCookieSigned    = regexp.MustCompile(`^[A-Za-z0-9+/=]{16,}--[0-9a-f]{40}(?:[0-9a-f]{24})?$`)
 	reCookieEncrypted = regexp.MustCompile(`^[A-Za-z0-9+/=]{16,}--[A-Za-z0-9+/=]{16}--[A-Za-z0-9+/=]{22,24}$`)
 
-	reRailsLog       = regexp.MustCompile(`Started (?:GET|POST|PUT|PATCH|DELETE|HEAD) "[^"]*" for [0-9a-fA-F.:]+ at \d{4}-\d{2}-\d{2}|Processing by \w+(?:::\w+)*#\w+ as `)
-	reConfigRu       = regexp.MustCompile(`(?m)^\s*run\s+[A-Z(:]|^\s*require(?:_relative)?\s+['"]`)
-	reRakefile       = regexp.MustCompile(`Rails\.application\.load_tasks|require(?:_relative)?\s+['"](?:rake|\.?/?config/application)['"]|(?m)^\s*task\s+:?\w+`)
-	reDatabaseYml    = regexp.MustCompile(`(?m)^\s*adapter:\s*([\w-]+)`)
-	reMasterKey      = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	reSidekiqVersion = regexp.MustCompile(`Sidekiq v?(\d+\.\d+\.\d+)`)
-	reJSONVersion    = regexp.MustCompile(`"version"\s*:\s*"([^"]{1,60})"`)
-	reGHESVersion    = regexp.MustCompile(`"installed_version"\s*:\s*"(\d+\.\d+\.\d+)"`)
-	reGitLabHelp     = regexp.MustCompile(`GitLab\s+(?:Community|Enterprise) Edition\s+(?:<[^>]+>\s*)*v?(\d+\.\d+\.\d+)`)
-	reDiscourseGen   = regexp.MustCompile(`(?i)Discourse (\d+(?:\.\d+){1,2}(?:\.beta\d+)?)`)
-	reUUID           = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	reLeadingVersion = regexp.MustCompile(`^(\d+(?:\.\d+){1,3})`)
+	reRailsLog        = regexp.MustCompile(`Started (?:GET|POST|PUT|PATCH|DELETE|HEAD) "[^"]*" for [0-9a-fA-F.:]+ at \d{4}-\d{2}-\d{2}|Processing by \w+(?:::\w+)*#\w+ as `)
+	reConfigRu        = regexp.MustCompile(`(?m)^\s*run\s+[A-Z(:]|^\s*require(?:_relative)?\s+['"]`)
+	reRakefile        = regexp.MustCompile(`Rails\.application\.load_tasks|require(?:_relative)?\s+['"](?:rake|\.?/?config/application)['"]|(?m)^\s*task\s+:?\w+`)
+	reDatabaseYml     = regexp.MustCompile(`(?m)^\s*adapter:\s*([\w-]+)`)
+	reMasterKey       = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	reSidekiqVersion  = regexp.MustCompile(`Sidekiq v?(\d+\.\d+\.\d+)`)
+	reJSONVersion     = regexp.MustCompile(`"version"\s*:\s*"([^"]{1,60})"`)
+	reGHESVersion     = regexp.MustCompile(`"installed_version"\s*:\s*"(\d+\.\d+\.\d+)"`)
+	reGitLabHelp      = regexp.MustCompile(`GitLab\s+(?:Community|Enterprise) Edition\s+(?:<[^>]+>\s*)*v?(\d+\.\d+\.\d+)`)
+	reDiscourseGen    = regexp.MustCompile(`(?i)Discourse (\d+(?:\.\d+){1,2}(?:\.beta\d+)?)`)
+	reDeviseRemember  = regexp.MustCompile(`^remember_[a-z][a-z_]*_token$`)
+	reTruffleRuby     = regexp.MustCompile(`truffleruby [\d.]+(?:-\w+)?, like ruby (\d+\.\d+\.\d+)`)
+	reBundlerMismatch = regexp.MustCompile(`Your Ruby version is (\d+\.\d+\.\d+), but your Gemfile specified`)
+	reDockerRuby      = regexp.MustCompile(`(?m)^(?:ARG RUBY_VERSION=(\d+\.\d+(?:\.\d+)?)|FROM (?:[\w./-]+/)?ruby:(\d+\.\d+(?:\.\d+)?))`)
+	reRubocopTarget   = regexp.MustCompile(`(?m)^\s*TargetRubyVersion:\s*(\d+\.\d+)`)
+	reSchemaVersion   = regexp.MustCompile(`ActiveRecord::Schema\[(\d+\.\d+)\]\.define`)
+	reLoadDefaults    = regexp.MustCompile(`config\.load_defaults\s+(\d+\.\d+)`)
+	reEncryptedFile   = regexp.MustCompile(`^[A-Za-z0-9+/=]{20,}--[A-Za-z0-9+/=]{12,}--[A-Za-z0-9+/=]{20,}$`)
+	reUUID            = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	reLeadingVersion  = regexp.MustCompile(`^(\d+(?:\.\d+){1,3})`)
 )
 
 // railsGems are the component gems whose version equals the Rails version.
@@ -107,6 +123,7 @@ type analysis struct {
 	observed    map[string]string      // gem name -> version, from backtrace paths
 	env         string
 	pumaMethod  bool // the unknown-method probe behaved like Puma
+	hint        railsHint
 }
 
 type compVersion struct{ ver, src string }
@@ -321,6 +338,30 @@ func Analyze(in Input) *Detection {
 		}
 	}
 
+	// --- JSON error-format probe --------------------------------------------
+	if j := in.JSONErrorProbe; j != nil && j.Err == "" {
+		a.analyzeResponse(j, j.RequestURL+" (Accept: application/json)")
+		ctrlJSON := in.Control != nil && strings.Contains(mediaType(in.Control.HeaderGet("Content-Type")), "json")
+		if a.seen["body.rails-json-error"] && strings.Contains(mediaType(j.HeaderGet("Content-Type")), "json") && !ctrlJSON {
+			a.addEv(Evidence{
+				Signal: "behavior.rails-json-error", Source: j.RequestURL, Weight: 25,
+				Detail:  "The not-found page switches to Rails' {status, error} JSON body when JSON is requested (ActionDispatch::PublicExceptions)",
+				Pattern: "Accept: application/json", Status: j.Status,
+			})
+		}
+	}
+
+	// --- Asset-server probe --------------------------------------------------
+	if p := in.AssetProbe; p != nil && p.Err == "" && p.Status == 404 && !ctrl.matches(p) &&
+		strings.TrimSpace(p.BodyString()) == "Not found" && strings.HasPrefix(mediaType(p.HeaderGet("Content-Type")), "text/plain") {
+		a.addFw("Rails")
+		a.addEv(Evidence{
+			Signal: "behavior.asset-server-not-found", Source: p.RequestURL, Weight: 50,
+			Detail:  "A missing /assets/ file is answered with the plain \"Not found\" of the Sprockets / Propshaft asset server (assets are compiled on demand — development-style configuration)",
+			Pattern: AssetNotFoundProbe, Snippet: "Not found", Status: p.Status,
+		})
+	}
+
 	// --- Unknown-method behavioural probe -----------------------------------
 	if m := in.MethodProbe; m != nil && m.Err == "" {
 		a.analyzeResponse(m, m.RequestURL)
@@ -443,6 +484,9 @@ func Analyze(in Input) *Detection {
 	sort.Strings(d.Modules)
 	sortEvidence(d.Evidence)
 
+	if _, known := d.FrameworkVersions["Rails"]; !known && a.fwSet["Rails"] {
+		d.RailsVersionHint = a.railsVersionHint()
+	}
 	d.VersionConflict = versionsConflict(d.VersionObservations)
 	d.RailsEnv = a.inferEnv()
 	if d.IsRuby {
@@ -723,9 +767,15 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 				// Server and X-Powered-By both advertise Passenger; count once.
 				signal = "stack.passenger"
 			}
+			weight := rubyWeight(sig.weight, sig.rubyImplied, sig.variant)
+			if sig.framework == "Shopify" {
+				// Several platform headers and cookies identify a Shopify
+				// storefront; together they count once.
+				signal, weight = "stack.shopify", 55
+			}
 			addEv(Evidence{
 				Signal: signal,
-				Source: source, Weight: rubyWeight(sig.weight, sig.rubyImplied, sig.variant), Detail: sig.detail, Data: val,
+				Source: source, Weight: weight, Detail: sig.detail, Data: val,
 				Where: "response header '" + sig.header + "'", How: how,
 				Pattern: pattern, Snippet: sig.header + ": " + val, Probe: source,
 			})
@@ -801,6 +851,10 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 				how = "cookie-name suffix match"
 			}
 			signal := "cookie." + strings.ToLower(strings.Trim(sig.name, "_-"))
+			weight := sig.weight
+			if sig.framework == "Shopify" {
+				signal, weight = "stack.shopify", 55
+			}
 			if strings.HasPrefix(sig.name, "ahoy_") {
 				signal = "cookie.ahoy" // the visit and visitor cookies count once
 				a.addGem("ahoy_matey")
@@ -812,7 +866,7 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 			}
 			addEv(Evidence{
 				Signal: signal,
-				Source: source, Weight: sig.weight, Detail: sig.detail, Data: c.Name,
+				Source: source, Weight: weight, Detail: sig.detail, Data: c.Name,
 				Where: "Set-Cookie header", How: how, Pattern: sig.name,
 				Snippet: "Set-Cookie: " + c.Name + "=…", Probe: source,
 			})
@@ -822,7 +876,33 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 			}
 			break // the first (most specific) matching signature wins
 		}
+		if reDeviseRemember.MatchString(c.Name) {
+			addEv(Evidence{
+				Signal: "cookie.devise-remember", Source: source, Weight: 50,
+				Detail: "Devise remember-me cookie (remember_<scope>_token)", Data: c.Name,
+				Where: "Set-Cookie header", How: "cookie-name pattern", Pattern: reDeviseRemember.String(),
+				Snippet: "Set-Cookie: " + c.Name + "=…", Probe: source,
+			})
+			a.addGem("devise")
+		}
 		a.cookieValueHeuristics(c.Name, c.Value, source, addEv)
+	}
+
+	// Redirect responses along the way: Rails' redirect_to writes a fixed
+	// body. Phoenix copied it verbatim, so its markers disqualify the match.
+	if !looksPhoenix(resp, resp.BodyString()) {
+		for _, hb := range resp.HopBodies {
+			if strings.Contains(hb, "<html><body>You are being <a href=") && strings.Contains(hb, ">redirected</a>.</body></html>") {
+				addEv(Evidence{
+					Signal: "body.rails-redirect-body", Source: source, Weight: 55,
+					Detail: "Rails redirect_to response body (seen on a redirect hop)",
+					Where:  "redirect response body", How: "exact body match",
+					Snippet: "<html><body>You are being <a href=…>redirected</a>.</body></html>", Probe: source,
+				})
+				a.addFw("Rails")
+				break
+			}
+		}
 	}
 
 	// Body-based signatures.
@@ -834,9 +914,16 @@ func (a *analysis) analyzeResponse(resp *probe.Response, source string) {
 	// their content is never quoted into evidence.
 	withhold := resp.Status == 200 && sensitivePath(source)
 	prose := resp.Status < 400 && looksLikeProse(body)
+	showsCode := strings.Contains(body, "<pre") || strings.Contains(body, "<code")
 	phoenix := looksPhoenix(resp, body)
 	for _, sig := range bodySigs {
 		if sig.errorOnly && prose {
+			continue
+		}
+		if sig.noCode && showsCode && resp.Status < 400 {
+			continue
+		}
+		if phoenix && sig.id == "body.rails-redirect-body" {
 			continue
 		}
 		if phoenix && (sig.id == "body.asset-digest-weak" || sig.id == "body.rails-asset-digest") {
@@ -933,6 +1020,15 @@ func (a *analysis) headerHeuristics(resp *probe.Response, source string, addEv f
 				}
 			}
 		}
+	}
+	if v := reLeadingVersion.FindString(strings.TrimPrefix(strings.TrimSpace(resp.HeaderGet("X-Ruby-Version")), "ruby ")); v != "" {
+		a.setVersion(v, "X-Ruby-Version header", rankRunning)
+	}
+	if v := reLeadingVersion.FindString(strings.TrimSpace(resp.HeaderGet("X-Rails-Version"))); v != "" {
+		a.setComp("Rails", v, "X-Rails-Version header")
+	}
+	if v := reLeadingVersion.FindString(strings.TrimSpace(resp.HeaderGet("X-Rack-Version"))); v != "" {
+		a.setComp("Rack", v, "X-Rack-Version header")
 	}
 	if v := resp.HeaderGet("X-GitHub-Enterprise-Version"); v != "" {
 		a.setComp("GitHub Enterprise Server", v, "X-GitHub-Enterprise-Version header")
@@ -1051,6 +1147,36 @@ func (a *analysis) bodyVersions(body, source string) {
 	if strings.Contains(strings.ToLower(body), "jruby") && reJRubyBanner.MatchString(body) {
 		a.setVariant("JRuby")
 	}
+	if strings.Contains(body, "org.jruby.") || strings.Contains(body, "org/jruby/") {
+		a.setVariant("JRuby")
+	}
+	if m := reTruffleRuby.FindStringSubmatch(body); m != nil {
+		a.setVariant("TruffleRuby")
+		a.setVersion(m[1], "truffleruby version string in response body", rankRunning)
+	}
+	if m := reBundlerMismatch.FindStringSubmatch(body); m != nil {
+		a.setVersion(m[1], "Bundler Ruby-version mismatch message", rankRunning)
+	}
+	if m := reDockerRuby.FindStringSubmatch(body); m != nil && !strings.Contains(body, "<html") {
+		v := m[1]
+		if v == "" {
+			v = m[2]
+		}
+		if strings.Count(v, ".") >= 2 {
+			a.setVersion(v, "Dockerfile Ruby image", rankDeclared)
+		} else {
+			a.setBranch(v)
+		}
+	}
+	if m := reRubocopTarget.FindStringSubmatch(body); m != nil && !strings.Contains(body, "<html") {
+		a.setBranch(m[1])
+	}
+	if m := reSchemaVersion.FindStringSubmatch(body); m != nil {
+		a.hint.atLeast(m[1], "db/schema.rb format")
+	}
+	if m := reLoadDefaults.FindStringSubmatch(body); m != nil {
+		a.hint.atLeast(m[1], "config.load_defaults")
+	}
 	if m := reRubyInstallPath.FindStringSubmatch(body); m != nil {
 		a.setVersion(strings.Replace(m[1], "-p", "p", 1), "Ruby install path in response body", rankDeclared)
 	}
@@ -1083,6 +1209,14 @@ func (a *analysis) detectAppEndpoints(u string, resp *probe.Response, body strin
 	lu := strings.ToLower(pathOf(u))
 	st := resp.Status
 	switch {
+	case lu == "/cable":
+		if st == 404 && strings.TrimSpace(body) == "Page not found" {
+			a.addFw("Rails")
+			a.addGem("actioncable")
+			a.hint.atLeast("5.0", "Action Cable")
+			a.addEv(Evidence{Signal: "diag.action-cable", Source: u, Weight: 65, Status: st, Data: "Page not found",
+				Detail: "Action Cable endpoint answers a plain HTTP request with its \"Page not found\" (WebSocket server mounted at /cable)"})
+		}
 	case strings.HasPrefix(lu, "/api/v1/instance") || strings.HasPrefix(lu, "/api/v2/instance"):
 		m := reJSONVersion.FindStringSubmatch(body)
 		if st != 200 || m == nil {
@@ -1161,6 +1295,24 @@ func (a *analysis) detectExposures(u string, resp *probe.Response, body string) 
 			a.addFw("Rails")
 			a.setEnv("development")
 			ev("diag.rails-routes", 85, "/rails/info/routes is publicly exposed (development-mode route listing)", "route table")
+		}
+	case strings.HasPrefix(lu, "/__sinatra__/"):
+		if st == 200 && strings.HasPrefix(mediaType(resp.HeaderGet("Content-Type")), "image/") {
+			a.addFw("Sinatra")
+			a.setEnv("development")
+			ev("diag.sinatra-dev-image", 85, "Sinatra's built-in error-page image is served (/__sinatra__/, development mode)", "image")
+		}
+	case lu == "/manifest.json":
+		if !html && strings.Contains(body, `"theme_color": "red"`) && strings.Contains(body, `/icon.png`) {
+			a.addFw("Rails")
+			a.hint.atLeast("7.2", "default PWA manifest")
+			ev("diag.rails-pwa-manifest", 55, "Rails generator default PWA manifest", "theme_color: red")
+		}
+	case strings.HasSuffix(lu, "/config/credentials.yml.enc"):
+		if reEncryptedFile.MatchString(strings.TrimSpace(body)) {
+			a.addFw("Rails")
+			a.hint.atLeast("5.2", "encrypted credentials")
+			ev("diag.credentials-enc", 60, "config/credentials.yml.enc is publicly readable (encrypted; decryptable with config/master.key)", "")
 		}
 	case lu == "/icon.svg":
 		if len(body) < 300 && strings.Contains(body, `<circle cx="256" cy="256" r="256" fill="red"/>`) {
@@ -1573,7 +1725,7 @@ func pathOf(raw string) string {
 // sensitivePath reports probe URLs whose bodies may hold secrets.
 func sensitivePath(raw string) bool {
 	p := strings.ToLower(pathOf(raw))
-	for _, suffix := range []string{"/.env", "/master.key", "/secrets.yml", "/database.yml", "/credentials.yml.enc", ".log", ".key", ".pem"} {
+	for _, suffix := range []string{"/.env", "/master.key", "/secrets.yml", "/database.yml", "/credentials.yml.enc", "/.bundle/config", "/secret_token.rb", "/storage.yml", ".log", ".key", ".pem"} {
 		if strings.HasSuffix(p, suffix) {
 			return true
 		}
@@ -1673,4 +1825,119 @@ func sortVulns(vs []Vulnerability) {
 		}
 		return vs[i].ID > vs[j].ID
 	})
+}
+
+// railsHint accumulates lower and upper bounds for the Rails version from
+// generation-specific defaults.
+type railsHint struct {
+	min, max       string // max is exclusive
+	minWhy, maxWhy string
+}
+
+func (h *railsHint) atLeast(v, why string) {
+	if h.min == "" || compareVersion(v, h.min) > 0 {
+		h.min, h.minWhy = v, why
+	}
+}
+
+func (h *railsHint) below(v, why string) {
+	if h.max == "" || compareVersion(v, h.max) < 0 {
+		h.max, h.maxWhy = v, why
+	}
+}
+
+// railsVersionHint turns the generation-specific signals that were seen into a
+// human-readable range. Every rule is a framework default, so a customised
+// application can defeat it — hence "hint".
+func (a *analysis) railsVersionHint() string {
+	h := a.hint
+	for _, r := range []struct {
+		signal, ver, why string
+		upper            bool
+	}{
+		{"cookie.rails-encrypted", "5.2", "AES-GCM encrypted cookies", false},
+		{"body.rails-action-cable", "5.0", "Action Cable", false},
+		{"body.rails-active-storage", "5.2", "Active Storage", false},
+		{"body.rails-csp-nonce", "5.2", "CSP nonce helper", false},
+		{"body.rails-action-text-attachment", "6.0", "Action Text", false},
+		{"body.rails-view-annotation", "6.1", "view annotations", false},
+		{"body.rails-importmap", "7.0", "importmap-rails", false},
+		{"body.rails-importmap-turbo", "7.0", "importmap-rails", false},
+		{"header.server-timing", "7.0", "Server-Timing middleware", false},
+		{"diag.rails-health", "7.1", "/up health endpoint", false},
+		{"body.rails-propshaft-manifest", "7.0", "Propshaft", false},
+		{"diag.rails-default-icon", "7.2", "default icon.svg", false},
+		{"body.rails-default-icons", "7.2", "default layout icons", false},
+		{"body.rails-unsupported-browser", "7.2", "406 unsupported-browser page", false},
+		{"body.rails-service-worker", "7.2", "default service worker", false},
+		{"body.rails-utf8-field", "6.0", "utf8 form field", true},
+		{"header.x-ua-compatible", "4.0", "BestStandardsSupport header", true},
+		{"cookie.ruby-marshal", "4.1", "Marshal cookie serializer", true},
+		{"behavior.empty-favicon", "7.2", "empty default favicon", true},
+	} {
+		if !a.seen[r.signal] {
+			continue
+		}
+		if r.upper {
+			h.below(r.ver, r.why)
+		} else {
+			h.atLeast(r.ver, r.why)
+		}
+	}
+	for _, ev := range a.d.Evidence {
+		if ev.Signal != "header.rails-security-defaults" {
+			continue
+		}
+		switch {
+		case strings.Contains(ev.Detail, "7.1 or later"):
+			h.atLeast("7.1", "default security headers")
+		case strings.Contains(ev.Detail, "matches Rails 7.0"):
+			h.atLeast("7.0", "default security headers")
+		}
+		// Older-looking header sets give no upper bound: applications that
+		// manage their own security headers keep them across upgrades.
+	}
+	switch {
+	case h.min != "" && h.max != "" && compareVersion(h.min, h.max) < 0:
+		return fmt.Sprintf("%s or later, before %s (from %s; %s)", h.min, h.max, h.minWhy, h.maxWhy)
+	case h.min != "" && h.max != "":
+		return "" // contradictory defaults: a customised application
+	case h.min != "":
+		return fmt.Sprintf("%s or later (from %s)", h.min, h.minWhy)
+	case h.max != "":
+		return fmt.Sprintf("before %s (from %s)", h.max, h.maxWhy)
+	}
+	return ""
+}
+
+var reAssetRef = regexp.MustCompile(`(?:src|href)=["'](/(?:assets|packs|vite)/[\w./-]+\.js)["']`)
+
+// AssetCandidates returns up to max same-origin JavaScript bundle paths
+// referenced by a page, preferring application bundles. The scanner fetches
+// them in deep mode: a bundle that carries rails-ujs, Action Cable or Active
+// Storage client code is evidence the page itself may not show.
+func AssetCandidates(r *probe.Response, max int) []string {
+	if r == nil || r.Err != "" || max <= 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var preferred, rest []string
+	for _, m := range reAssetRef.FindAllStringSubmatch(r.BodyString(), 60) {
+		p := m[1]
+		if seen[p] || strings.Contains(p, "..") {
+			continue
+		}
+		seen[p] = true
+		l := strings.ToLower(p)
+		if strings.Contains(l, "application") || strings.Contains(l, "rails") || strings.Contains(l, "turbo") || strings.Contains(l, "main") {
+			preferred = append(preferred, p)
+		} else {
+			rest = append(rest, p)
+		}
+	}
+	out := append(preferred, rest...)
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
 }

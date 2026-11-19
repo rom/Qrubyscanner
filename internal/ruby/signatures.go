@@ -92,6 +92,19 @@ var cookieSigs = []cookieSig{
 	{"guest_token", matchExact, "Spree", 30, "Spree/Solidus guest order token cookie"},
 	{"_gh_sess", matchExact, "GitHub", 45, "GitHub (Rails) session cookie"},
 	{"_gh_ent", matchPrefix, "GitHub Enterprise Server", 50, "GitHub Enterprise session cookie"},
+	{"user_credentials", matchExact, "Rails", 50, "Authlogic persistence cookie"},
+	{"__profilin", matchExact, "rack-mini-profiler", 60, "rack-mini-profiler control cookie"},
+	{"vanity_id", matchExact, "", 45, "Vanity A/B testing cookie (vanity gem)"},
+	{"_rucaptcha_session_id", matchExact, "Rails", 50, "rucaptcha gem cookie"},
+	{"BEEFSESSION", matchExact, "BeEF", 80, "BeEF (Browser Exploitation Framework, Ruby) session cookie"},
+	{"cw_d_session_info", matchExact, "Chatwoot", 55, "Chatwoot dashboard session cookie"},
+	{"log_session_id", matchExact, "Canvas LMS", 50, "Canvas LMS log session cookie"},
+	{"_legacy_normandy_session", matchExact, "Canvas LMS", 65, "Canvas LMS legacy session cookie"},
+	{"experimentation_subject_id", matchExact, "GitLab", 35, "GitLab experimentation cookie"},
+	{"_bypass_cache", matchExact, "Discourse", 30, "Discourse cache-bypass cookie"},
+	{"_shopify_y", matchExact, "Shopify", 30, "Shopify storefront cookie (Rails-based SaaS)"},
+	{"_shopify_s", matchExact, "Shopify", 30, "Shopify storefront cookie (Rails-based SaaS)"},
+	{"secure_customer_sig", matchExact, "Shopify", 30, "Shopify storefront cookie (Rails-based SaaS)"},
 	{"ahoy_visitor", matchExact, "", 40, "Ahoy analytics cookie (ahoy_matey gem)"},
 	{"ahoy_visit", matchExact, "", 40, "Ahoy analytics cookie (ahoy_matey gem)"},
 	{"remember_user_token", matchExact, "", 50, "Devise remember-me cookie"},
@@ -124,6 +137,12 @@ var headerSigs = []headerSig{
 	{header: "Server", re: reMongrel, rubyImplied: true, weight: 80, detail: "Mongrel Ruby web server"},
 	{header: "Server", re: reUnicorn, rubyImplied: true, weight: 80, detail: "Unicorn Ruby web server"},
 	{header: "Server", re: reFalcon, rubyImplied: true, weight: 75, detail: "Falcon (async Ruby) web server"},
+	{header: "Server", contains: "mod_ruby", rubyImplied: true, variant: "Ruby", weight: 85, detail: "Apache mod_ruby (embedded Ruby interpreter)"},
+	{header: "Server", contains: "iodine", rubyImplied: true, weight: 70, detail: "Iodine Ruby web server"},
+	{header: "Server", re: regexp.MustCompile(`(?i)^agoo\b`), rubyImplied: true, weight: 70, detail: "Agoo Ruby web server"},
+	{header: "Server", re: regexp.MustCompile(`(?i)^itsi\b`), rubyImplied: true, weight: 70, detail: "Itsi Ruby web server"},
+	{header: "Server", contains: "ngx_mruby", rubyImplied: true, variant: "mruby", weight: 60, detail: "ngx_mruby (embedded mruby in nginx)"},
+	{header: "Server", contains: "mod_mruby", rubyImplied: true, variant: "mruby", weight: 60, detail: "mod_mruby (embedded mruby in Apache)"},
 	{header: "Server", contains: "rainbows", rubyImplied: true, weight: 75, detail: "Rainbows! Ruby web server"},
 	{header: "Server", contains: "pitchfork", rubyImplied: true, weight: 75, detail: "Pitchfork Ruby web server"},
 	{header: "Server", contains: "goliath", rubyImplied: true, weight: 70, detail: "Goliath Ruby web server"},
@@ -160,6 +179,22 @@ var headerSigs = []headerSig{
 	{header: "X-Meta-Request-Version", framework: "Rails", rubyImplied: true, weight: 65, detail: "meta_request gem header (RailsPanel development tooling)"},
 	{header: "Turbolinks-Location", framework: "Rails", rubyImplied: true, weight: 45, detail: "Turbolinks redirect header (turbolinks-rails)"},
 	{header: "X-UA-Compatible", re: regexp.MustCompile(`(?i)^IE=Edge,chrome=1$`), rubyImplied: true, weight: 20, detail: "X-UA-Compatible: IE=Edge,chrome=1 response header (Rails 3 BestStandardsSupport default)"},
+	{header: "WWW-Authenticate", contains: `realm="Doorkeeper"`, framework: "Rails", rubyImplied: true, weight: 70, detail: "Doorkeeper OAuth provider challenge (doorkeeper gem)"},
+	{header: "WWW-Authenticate", contains: `realm="Application"`, framework: "Rails", rubyImplied: true, weight: 45, detail: "HTTP authentication with Rails' default realm \"Application\""},
+	{header: "X-Bullet-Footer-Text", framework: "Rails", rubyImplied: true, weight: 70, detail: "Bullet N+1 detector header (development tooling)"},
+	{header: "X-Bullet-Console-Text", framework: "Rails", rubyImplied: true, weight: 70, detail: "Bullet N+1 detector header (development tooling)"},
+	{header: "X-Rack-Dev-Mark-Env", framework: "Rack", rubyImplied: true, weight: 65, detail: "rack-dev-mark environment header"},
+	{header: "X-MiniProfiler-Ids", rubyImplied: true, weight: 15, detail: "MiniProfiler header (rack-mini-profiler; also exists for .NET)"},
+	{header: "X-Frame-Options", re: regexp.MustCompile(`(?i)^ALLOWALL$`), rubyImplied: true, weight: 25, detail: "X-Frame-Options: ALLOWALL (a non-standard value that is a Rails idiom)"},
+	{header: "X-Ruby-Version", rubyImplied: true, variant: "Ruby", weight: 80, detail: "X-Ruby-Version header"},
+	{header: "X-Rails-Version", framework: "Rails", rubyImplied: true, weight: 80, detail: "X-Rails-Version header"},
+	{header: "X-Rack-Version", framework: "Rack", rubyImplied: true, weight: 75, detail: "X-Rack-Version header"},
+	{header: "Gitlab-Lb", framework: "GitLab", rubyImplied: true, weight: 45, detail: "GitLab load-balancer header"},
+	{header: "Gitlab-Sv", framework: "GitLab", rubyImplied: true, weight: 45, detail: "GitLab serving-node header"},
+	{header: "X-Discourse-Cached", framework: "Discourse", rubyImplied: true, weight: 60, detail: "Discourse anonymous-cache header"},
+	{header: "X-Sorting-Hat-ShopId", framework: "Shopify", rubyImplied: true, weight: 30, detail: "Shopify storefront routing header (Rails-based SaaS)"},
+	{header: "X-Sorting-Hat-PodId", framework: "Shopify", rubyImplied: true, weight: 30, detail: "Shopify storefront routing header (Rails-based SaaS)"},
+	{header: "Powered-By", contains: "shopify", framework: "Shopify", rubyImplied: true, weight: 30, detail: "Powered-By: Shopify (Rails-based SaaS)"},
 	{header: "Link", re: rePreloadLink, framework: "Rails", rubyImplied: true, weight: 35, detail: "Link preload header for fingerprinted asset-pipeline files"},
 
 	// --- Applications ---
@@ -192,6 +227,8 @@ type bodySig struct {
 	// to error responses and plain pages: documentation, blogs and Q&A sites
 	// quote those names constantly without running Ruby.
 	errorOnly bool
+	// noCode skips the signature on pages that display code samples.
+	noCode bool
 }
 
 // errOnly marks signatures by id as errorOnly (see bodySig).
@@ -200,13 +237,29 @@ var errOnlyIDs = map[string]bool{
 	"body.sinatra-class": true, "body.ruby-nomethod": true, "body.ruby-uninitialized-const": true,
 	"body.ruby-exception-class": true, "body.hanami": true, "body.padrino": true, "body.roda": true,
 	"body.grape": true, "body.ruby-backtrace": true, "body.bundler-error": true, "body.erb-source": true,
-	"body.ruby-source": true, "body.rails-i18n-missing": false,
+	"body.ruby-source": true, "body.rails-record-not-found": true, "body.rails-csrf-failure": true,
+	"body.template-engine-error": true, "body.db-adapter-error": true, "body.ruby-arity-error": true,
+	"body.ruby-syntax-error": true, "body.jruby-trace": true, "body.ruby-nil-class": true,
+	"body.rails-validation-message": false, "body.rails-schema": false,
+}
+
+// noCodeIDs are signatures for Ruby values leaking into ordinary pages. They
+// are skipped on pages that display code (<pre>/<code>), where such strings
+// are quoted on purpose.
+var noCodeIDs = map[string]bool{
+	"body.ruby-object-inspect": true, "body.ruby-hash-inspect": true, "body.rack-env-dump": true,
+	"body.asset-js-ujs": true, "body.rails-load-defaults": true, "body.rails-schema": true,
+	"body.dockerfile-ruby": true, "body.procfile-ruby": true, "body.rubocop-config": true,
+	"body.bundle-config": true, "body.puma-config": true, "body.rails-readme": true,
 }
 
 func init() {
 	for i := range bodySigs {
 		if errOnlyIDs[bodySigs[i].id] {
 			bodySigs[i].errorOnly = true
+		}
+		if noCodeIDs[bodySigs[i].id] {
+			bodySigs[i].noCode = true
 		}
 	}
 }
@@ -239,7 +292,7 @@ var bodySigs = []bodySig{
 	bs("body.rails-routing-error", `No route matches \[(?:GET|POST|HEAD|PUT|PATCH|DELETE|OPTIONS)\]|ActionController::(?:RoutingError|UnknownFormat|InvalidAuthenticityToken|ParameterMissing|BadRequest|UnknownHttpMethod)`, "Rails", 80, "Rails routing / controller exception"),
 	bs("body.rails-exception-class", `\b(?:ActiveRecord::\w+|ActionView::(?:Template::Error|MissingTemplate)|ActionDispatch::\w+|AbstractController::\w+|ActiveSupport::\w+|ActiveModel::\w+|ActiveStorage::\w+)\b`, "Rails", 70, "Rails framework class named in the response"),
 	bs("body.rails-welcome", `Yay! You(?:&rsquo;|’|')re on Rails!|You(?:&rsquo;|’|')re riding Ruby on Rails!|<title>Ruby on Rails(?:: Welcome aboard| \d[\d.]*)?</title>`, "Rails", 85, "Rails default welcome page"),
-	bs("body.rails-default-error-page", `rails-default-error-page|[Tt]he page you were looking for doesn(?:&#39;|&rsquo;|’|')t exist|We(?:&#39;|&rsquo;|’|')re sorry, but something went wrong|The change you wanted was rejected|If you are the application owner check the logs for more information|The server cannot process the request due to a client error`, "Rails", 65, "Rails default static error page (public/404|422|500.html)"),
+	bs("body.rails-default-error-page", `rails-default-error-page|[Tt]he page you were looking for doesn(?:&#39;|&rsquo;|’|')t exist|We(?:&#39;|&rsquo;|’|')re sorry, but something went wrong|The change you wanted was rejected|If you are the application owner check the logs for more information|The server cannot process the request due to a client error|You may have mistyped the address or the page may have moved|Maybe you tried to change something you didn(?:&#39;|&rsquo;|’|')t have access to`, "Rails", 65, "Rails default static error page (public/404|422|500.html)"),
 	bs("body.rails-csrf-meta", `<meta\s+name=["']csrf-param["']\s+content=["']authenticity_token["']|<meta\s+content=["']authenticity_token["']\s+name=["']csrf-param["']`, "Rails", 60, "Rails csrf_meta_tags (csrf-param = authenticity_token)"),
 	bs("body.rails-authenticity-token", `name=["']authenticity_token["']`, "Rails", 50, "Rails form authenticity_token field"),
 	bs("body.rails-utf8-field", `name=["']utf8["'][^>]*value=["'](?:&#x2713;|✓)["']`, "Rails", 45, "Rails form utf8 enforcer field (Rails < 6)"),
@@ -258,7 +311,7 @@ var bodySigs = []bodySig{
 	bs("body.rails-devise-form", `name=["']user\[(?:email|login|password|remember_me)\]["']`, "Rails", 40, "Rails nested form parameters for a Devise-style user model"),
 	bs("body.rails-blocked-host", `Blocked hosts?: [^<\n]{1,200}|To allow requests to (?:these hosts|[^,<]{1,100}), (?:make sure|add the following)[^<]{0,120}config\.hosts`, "Rails", 85, "Rails HostAuthorization \"Blocked host\" page"),
 	bs("body.rails-unsupported-browser", `Your browser is not supported \(406`, "Rails", 70, "Rails default 406-unsupported-browser page (Rails 7.2 or later)"),
-	bs("body.rails-json-error", `^\s*\{"status":\d{3},"error":"[A-Za-z ]{2,40}"\}\s*$`, "Rails", 50, "Rails PublicExceptions JSON error body ({status, error})"),
+	bs("body.rails-json-error", `^\s*\{"status":"?\d{3}"?,"error":"[A-Za-z' ]{2,40}"(?:,"exception":"[^"]{0,300}"(?:,"traces":.*)?)?\}\s*$`, "Rails", 50, "Rails PublicExceptions JSON error body ({status, error})"),
 	bs("body.rails-xml-error", `<hash>\s*<status type="integer">\d{3}</status>\s*<error>`, "Rails", 70, "Rails PublicExceptions XML error body (ActiveSupport to_xml)"),
 	bs("body.rails-json-trace", `"traces":\{"Application Trace"|"exception":"#<Action(?:Controller|Dispatch)::`, "Rails", 85, "Rails development JSON exception payload"),
 	bs("body.rails-turbo-stream", `<turbo-cable-stream-source|signed-stream-name=`, "Rails", 60, "turbo-rails cable stream source"),
@@ -269,8 +322,88 @@ var bodySigs = []bodySig{
 	bs("body.rails-web-console", `data-mounted-path=["'][^"']*__web_console|__web_console/repl_sessions|id=["']console["'][^>]+data-session-id`, "Rails Web Console", 80, "Rails web-console is embedded (interactive Ruby console — development mode)"),
 	bs("body.better-errors", `__better_errors|BetterErrors::|<title>[^<]*better_errors`, "Better Errors", 75, "better_errors development error page"),
 
+	// --- Rails views, helpers and conventions ---
+	bs("body.rails-view-annotation", `<!-- BEGIN (?:app|lib|vendor|/)[\w./-]*\.(?:erb|haml|slim|builder|jbuilder)`, "Rails", 85, "Rails rendered-view annotations (annotate_rendered_view_with_filenames — development default)"),
+	bs("body.rails-field-with-errors", `class=["']field_with_errors["']`, "Rails", 65, "Action View field_with_errors wrapper"),
+	bs("body.rails-error-explanation", `id=["']error_explanation["']`, "Rails", 50, "Rails scaffold error_explanation block"),
+	bs("body.rails-button-to", `<form class=["']button_to["']`, "Rails", 60, "Rails button_to helper form"),
+	bs("body.rails-submit-commit", `<input type=["']submit["'] name=["']commit["']`, "Rails", 45, "Rails submit helper (name=\"commit\")"),
+	bs("body.rails-form-charset", `<form[^>]+accept-charset=["']UTF-8["'][^>]*>\s*<input[^>]+name=["'](?:utf8|authenticity_token|_method)["']`, "Rails", 55, "Rails form helper output (accept-charset then hidden Rails fields)"),
+	bs("body.rails-model-form", `<form[^>]+class=["'](?:simple_form |formtastic )?(?:new|edit)_[a-z_]+["'][^>]+id=["'](?:new|edit)_[a-z_]+(?:_\d+)?["']`, "Rails", 55, "Rails model form (form_for class/id convention)"),
+	bs("body.rails-data-method", `data-method=["'](?:delete|put|patch|post)["']|data-remote=["']true["']`, "Rails", 35, "Rails UJS data-method / data-remote attributes"),
+	bs("body.rails-default-icons", `<link rel=["']icon["'] href=["']/icon\.png["'] type=["']image/png["']>\s*<link rel=["']icon["'] href=["']/icon\.svg["'] type=["']image/svg\+xml["']>`, "Rails", 55, "Rails 7.2+ default layout icon links"),
+	bs("body.rails-notice", `<p (?:id=["']notice["']|style=["']color: green["'])>`, "Rails", 35, "Rails scaffold flash notice markup"),
+	bs("body.rails-flash-id", `id=["']flash_(?:notice|alert|error|success)["']`, "Rails", 30, "Rails-style flash element ids"),
+	bs("body.rails-http-auth", `^HTTP (?:Basic|Token|Digest): Access denied\.\s*$`, "Rails", 75, "Rails HTTP authentication failure body"),
+	bs("body.rails-redirect-body", `<html><body>You are being <a href=["'][^"']*["']>redirected</a>\.</body></html>`, "Rails", 55, "Rails redirect_to response body"),
+	bs("body.rails-csrf-failure", `Can(?:'|&#39;|’)t verify CSRF token authenticity|ActionController::InvalidAuthenticityToken`, "Rails", 65, "Rails CSRF verification failure message"),
+	bs("body.rails-validation-message", `can(?:'|&#39;|’)t be blank|is too short \(minimum is \d+ characters?\)|is too long \(maximum is \d+ characters?\)|is not included in the list|doesn(?:'|&#39;|’)t match (?:Password|Email)\b`, "Rails", 45, "Active Model default validation message"),
+	bs("body.rails-record-not-found", `Couldn(?:'|&#39;|’)t find [A-Z]\w+(?:::\w+)* with (?:'|&#39;)?\w+(?:'|&#39;)?=`, "Rails", 70, "Active Record \"Couldn't find … with id=\" message"),
+	bs("body.rails-debug-asset", `/assets/[\w./-]+\.(?:js|css)\?body=1|/assets/[\w./-]+\.debug-[0-9a-f]{8,64}\.js`, "Rails", 60, "Sprockets debug-mode asset URL (development)"),
+	bs("body.rails-action-text-attachment", `<action-text-attachment\b`, "Rails", 60, "Action Text attachment element"),
+	bs("body.rails-local-time", `<time[^>]+data-local=["'](?:time|date|time-ago|time-or-date|weekday|weekday-or-date)["']`, "Rails", 45, "local_time gem markup"),
+	bs("body.rails-turbo-meta", `<meta name=["']turbo-(?:refresh-method|refresh-scroll|visit-control|cache-control|prefetch)["']|<meta name=["']turbolinks-cache-control["']|<turbo-frame\b|<turbo-stream\b`, "", 25, "Turbo / Turbolinks markup (Hotwire, the Rails default front end)"),
+	bs("body.rails-importmap-app", `"application"\s*:\s*"/assets/application-[0-9a-f]{8,64}\.js"|"controllers/[\w/-]+"\s*:\s*"/assets/controllers/`, "Rails", 55, "importmap-rails pins for application and Stimulus controllers"),
+	bs("body.rails-propshaft-manifest", `"[\w./-]+\.(?:js|css)"\s*:\s*\{"digested_path"\s*:`, "Rails", 70, "Propshaft asset manifest"),
+	bs("body.vite-ruby", `/vite-dev/|/vite/assets/[\w.-]+-[\w-]{8,}\.(?:js|css)`, "Rails", 45, "vite_ruby asset paths (/vite/, /vite-dev/)"),
+	bs("body.rails-service-worker", `// Add a service worker for processing Web Push notifications:`, "Rails", 60, "Rails default PWA service worker"),
+	bs("body.rails-readme", `This README would normally document whatever steps are necessary to get the\s+application up and running`, "Rails", 65, "Rails generator default README"),
+	bs("body.rails-schema", `ActiveRecord::Schema(?:\[\d+\.\d+\])?\.define\(version:`, "Rails", 80, "db/schema.rb source"),
+	bs("body.rails-load-defaults", `config\.load_defaults\s+\d+\.\d+|class Application < Rails::Application`, "Rails", 80, "config/application.rb source"),
+	bs("body.devise-links", `Didn(?:'|&#39;|’)t receive (?:confirmation|unlock) instructions\?|/users/(?:password|confirmation|unlock)/new|/users/auth/[a-z0-9_]+`, "Rails", 50, "Devise shared links / route conventions"),
+	bs("body.devise-recovery", `(?i)you will receive (?:a password recovery link|an email with instructions (?:on|for) how to (?:reset your password|confirm your (?:email address|account)|unlock your account))`, "Rails", 55, "Devise default flash message"),
+	bs("body.cancan-denied", `You are not authorized to access this page\.`, "Rails", 40, "CanCanCan default access-denied message"),
+	bs("body.kaminari", `<span class=["']page gap["']>|<nav class=["']pagination["'] role=["']navigation["'] aria-label=["']pager["']>`, "Rails", 45, "Kaminari pagination markup"),
+	bs("body.will-paginate", `class=["'](?:previous_page|next_page)(?: disabled)?["']`, "Rails", 40, "will_paginate pagination markup"),
+	bs("body.pagy", `<nav[^>]+class=["']pagy[\s"'-]`, "", 45, "Pagy pagination markup"),
+	bs("body.paperclip-path", `/system/[a-z_]+/[a-z_]+/\d{3}/\d{3}/\d{3}/(?:original|large|medium|small|thumb)/`, "Rails", 55, "Paperclip attachment URL (id-partitioned /system/ path)"),
+	bs("body.carrierwave-path", `/uploads/[a-z_]+/[a-z_]+/\d+/[\w.%-]+\.(?:png|jpe?g|gif|webp|pdf|svg)`, "", 30, "CarrierWave default upload path (uploads/<model>/<mounted_as>/<id>/)"),
+	bs("body.dragonfly", `/media/W1siZiIs[\w-]{10,}`, "", 60, "Dragonfly media URL (Base64 job beginning [[\"f\",)"),
+	bs("body.graphiql-rails", `/assets/graphiql/rails/|graphiql-rails`, "Rails", 60, "graphiql-rails console"),
+	bs("body.apipie", `<title>[^<]*Apipie|/apipie/|apipie-`, "Rails", 55, "Apipie API documentation"),
+	bs("body.view-component-preview", `<title>(?:Component Previews|Lookbook)[^<]*</title>|/rails/view_components/`, "Rails", 60, "ViewComponent previews / Lookbook"),
+	bs("body.okcomputer", `(?m)^(?:default|database): (?:PASSED|FAILED) `, "Rails", 60, "OkComputer health-check output"),
+	bs("body.rails-db-viewer", `<title>Rails DB</title>|/rails/db/`, "Rails", 55, "rails_db database viewer"),
+
+	// --- Ruby runtime leaks in ordinary output ---
+	bs("body.ruby-object-inspect", `#&lt;[A-Z]\w*(?:::[A-Z]\w*)*:0x[0-9a-f]{8,16}\b|#<[A-Z]\w*(?:::[A-Z]\w*)*:0x[0-9a-f]{12,16}\b`, "", 70, "Ruby object inspect string leaked into output (#<Class:0x…>)"),
+	bs("body.ruby-nil-class", `\bnil:NilClass\b|for an instance of [A-Z]\w+`, "", 65, "Ruby NoMethodError receiver description"),
+	bs("body.ruby-hash-inspect", `\{(?::[a-z_]\w*|&quot;[\w ]+&quot;|"[\w ]+")\s?=(?:>|&gt;)\s?(?:"|&quot;|:|\d|nil\b|\{|\[)`, "", 55, "Ruby Hash#inspect output leaked (hash-rocket syntax)"),
+	bs("body.ruby-arity-error", `wrong number of arguments \(given \d+, expected \d+(?:\.\.\d+|\+)?\)|no implicit conversion of \w+ into \w+|stack level too deep|private method [`+"`"+`']\w+' called for`, "", 65, "Ruby exception message"),
+	bs("body.ruby-syntax-error", `syntax error, unexpected (?:end-of-input|keyword_end|'[^']{1,10}'|tIDENTIFIER|end)|expecting (?:keyword_end|`+"`"+`end'|end-of-input)`, "", 65, "Ruby parser syntax error"),
+	bs("body.ruby-version-mismatch", `Your Ruby version is \d+\.\d+\.\d+, but your Gemfile specified`, "", 80, "Bundler Ruby-version mismatch message"),
+	bs("body.jruby-trace", `\borg\.jruby\.[A-Za-z.$]+|org/jruby/\w+\.java:\d+`, "", 85, "JRuby frames in a stack trace"),
+	bs("body.template-engine-error", `(?:Haml|Slim|Liquid|Erubi|Tilt|Temple)::[A-Z]\w*(?:Error|Exception)`, "", 70, "Ruby template-engine exception"),
+	bs("body.db-adapter-error", `(?:PG|Mysql2|SQLite3|Trilogy)::[A-Z]\w+|(?:Sequel|Mongoid|Redis|Dalli)::[A-Z]\w*(?:Error|Exception)\b`, "", 65, "Ruby database/driver exception class"),
+	bs("body.rack-env-dump", `<h3 id=["']env-info["']>Rack ENV</h3>|rack\.(?:url_scheme|errors|input|multithread|hijack)\b`, "Rack", 75, "Rack environment keys dumped in the response"),
+	bs("body.dockerfile-ruby", `(?m)^(?:ARG RUBY_VERSION=\d+\.\d+|FROM (?:[\w./-]+/)?ruby:\d+\.\d+)`, "", 75, "Dockerfile building on a Ruby image"),
+	bs("body.procfile-ruby", `(?m)^(?:web|worker|release):\s*(?:bundle exec |bin/)(?:puma|rails|sidekiq|rackup|unicorn|thin|rake|thrust|good_job|jobs)\b`, "", 70, "Procfile starting a Ruby process"),
+	bs("body.rubocop-config", `(?m)^\s*TargetRubyVersion:\s*\d+\.\d+|^inherit_gem:|^require:\s*\n?\s*-?\s*rubocop-`, "", 65, "RuboCop configuration file"),
+	bs("body.bundle-config", `(?m)^BUNDLE_(?:PATH|WITHOUT|DEPLOYMENT|FROZEN|JOBS|BIN|GEMFILE|RETRY)[:=]`, "", 70, "Bundler configuration (.bundle/config)"),
+	bs("body.puma-config", `(?m)^\s*(?:threads\s+\w+,\s*\w+|workers\s+(?:ENV|\d)|plugin :tmp_restart|pidfile ENV)`, "", 70, "Puma configuration source"),
+
+	// --- More applications and admin frameworks ---
+	bs("body.active-admin-footer", `Powered by <a href=["']https?://(?:www\.)?activeadmin\.info["']`, "ActiveAdmin", 70, "ActiveAdmin footer"),
+	bs("body.avo", `/avo-assets/|data-controller=["'][^"']*\bavo-`, "Avo", 55, "Avo admin framework"),
+	bs("body.trestle", `/assets/trestle/|class=["'][^"']*trestle-`, "Trestle", 55, "Trestle admin framework"),
+	bs("body.blazer", `<title>[^<]*Blazer</title>|/assets/blazer/`, "Blazer", 50, "Blazer BI dashboard"),
+	bs("body.thredded", `class=["'][^"']*thredded--`, "Thredded", 55, "Thredded forum engine"),
+	bs("body.blacklight", `class=["'][^"']*blacklight-[a-z-]+|/assets/blacklight/`, "Blacklight", 60, "Blacklight discovery interface"),
+	bs("body.hyrax", `/assets/hyrax/|data-behavior=["']hyrax|class=["'][^"']*hyrax-`, "Hyrax", 55, "Hyrax / Samvera repository"),
+	bs("body.archivesspace", `<title>[^<]*ArchivesSpace[^<]*</title>|archivesspace\.org`, "ArchivesSpace", 60, "ArchivesSpace (JRuby on Rails)"),
+	bs("body.manageiq", `<title>ManageIQ[^<]*</title>|ManageIQ\.(?:angular|redux|component)`, "ManageIQ", 60, "ManageIQ"),
+	bs("body.beef", `<title>BeEF Authentication</title>|BeEF Control Panel`, "BeEF", 75, "BeEF control panel (Ruby)"),
+	bs("body.danbooru", `<meta name=["']generator["'] content=["']Danbooru|data-current-user-name=`, "Danbooru", 50, "Danbooru"),
+	bs("body.homeland", `<meta name=["']generator["'] content=["']Homeland|homeland-`, "Homeland", 50, "Homeland forum"),
+	bs("body.greenlight", `BigBlueButton Greenlight|<title>[^<]*Greenlight[^<]*</title>`, "Greenlight", 55, "BigBlueButton Greenlight"),
+	bs("body.chiliproject", `Powered by <a href=["']https?://www\.chiliproject\.org/?["']`, "ChiliProject", 75, "ChiliProject"),
+	bs("body.padrino-admin", `Padrino Admin`, "Padrino", 60, "Padrino admin interface"),
+	bs("body.asset-js-ujs", `Rails\.(?:ajax|fire|delegate|linkClickSelector|csrfToken)\b|@rails/ujs|rails-ujs`, "Rails", 45, "rails-ujs code in a JavaScript bundle"),
+	bs("body.asset-js-cable", `ActionCable\.createConsumer|createConsumer\(\)|ActionCable\.INTERNAL|actioncable-v1-json`, "Rails", 50, "Action Cable client code in a JavaScript bundle"),
+	bs("body.asset-js-storage", `ActiveStorage\.(?:start|DirectUpload)|direct-upload:initialize|data-direct-upload-url`, "Rails", 50, "Active Storage client code / direct-upload attributes"),
+
 	// --- Sinatra / Rack / other frameworks ---
-	bs("body.sinatra-404", `Sinatra doesn(?:&rsquo;|&#x2019;|’|')t know this ditty|__sinatra__/(?:404|500)\.png`, "Sinatra", 90, "Sinatra default not-found / error page"),
+	bs("body.sinatra-404", `Sinatra doesn(?:&rsquo;|&#x2019;|’|')t know this ditty|<img src=["'][^"']{0,200}__sinatra__/(?:404|500)\.png`, "Sinatra", 90, "Sinatra default not-found / error page"),
 	bs("body.sinatra-bad-request", `^Invalid query parameters: `, "Sinatra", 70, "Sinatra 400 response for an unparseable query"),
 	bs("body.sinatra-class", `Sinatra::(?:NotFound|Base|Application|ShowExceptions|BadRequest)`, "Sinatra", 80, "Sinatra class named in the response"),
 	bs("body.rack-class", `Rack::(?:ShowExceptions|Lint(?:::LintError)?|QueryParser|Utils|MethodOverride|Session|Multipart|Protection|Attack|Timeout)\b`, "Rack", 70, "Rack class named in the response"),

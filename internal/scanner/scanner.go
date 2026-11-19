@@ -641,6 +641,15 @@ func scanService(ctx context.Context, fetcher *probe.Fetcher, j job, opts Option
 			map[string]string{"X-Request-Id": ruby.RequestIDProbeValue})
 		spent++
 		in.MethodProbe = fetcher.Request(ctx, ruby.UnknownMethodProbe, base+"/")
+		spent++
+		in.JSONErrorProbe = fetcher.RequestWithHeaders(ctx, "GET", base+"/qrubyscanner_probe_404",
+			map[string]string{"Accept": "application/json"})
+		in.AssetProbe = get(base + ruby.AssetNotFoundProbe)
+		// JavaScript bundles referenced by the page often carry framework
+		// client code (rails-ujs, Action Cable) the HTML itself does not show.
+		for _, p := range ruby.AssetCandidates(root, 2) {
+			in.Extra[base+p] = get(base + p)
+		}
 
 		// If the host is rate-limiting (429/503, honouring any Retry-After by
 		// backing off rather than hammering), skip the optional discovery probes.
@@ -694,13 +703,15 @@ func finalizeService(res ServiceResult, in ruby.Input, opts Options, start time.
 // serialisable, sanitised corpus entry.
 func corpusService(target string, in ruby.Input) corpus.Service {
 	s := corpus.Service{
-		Target:      target,
-		Deep:        in.Deep,
-		Root:        corpus.FromResponse(in.Root),
-		Favicon:     corpus.FromResponse(in.Favicon),
-		ParamProbe:  corpus.FromResponse(in.ParamProbe),
-		MethodProbe: corpus.FromResponse(in.MethodProbe),
-		Control:     corpus.FromResponse(in.Control),
+		Target:         target,
+		Deep:           in.Deep,
+		Root:           corpus.FromResponse(in.Root),
+		Favicon:        corpus.FromResponse(in.Favicon),
+		ParamProbe:     corpus.FromResponse(in.ParamProbe),
+		MethodProbe:    corpus.FromResponse(in.MethodProbe),
+		JSONErrorProbe: corpus.FromResponse(in.JSONErrorProbe),
+		AssetProbe:     corpus.FromResponse(in.AssetProbe),
+		Control:        corpus.FromResponse(in.Control),
 	}
 	if len(in.Extra) > 0 {
 		s.Extra = make(map[string]*corpus.Response, len(in.Extra))

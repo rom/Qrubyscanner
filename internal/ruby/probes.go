@@ -26,6 +26,11 @@ const (
 	RequestIDProbeEcho  = "qrubyscan1-@probe_x"
 )
 
+// AssetNotFoundProbe is a path under /assets/ that cannot exist. When Rails
+// compiles assets on demand, the Sprockets / Propshaft server owns that
+// prefix and answers with a 404 whose body is the bare text "Not found".
+const AssetNotFoundProbe = "/assets/qrubyscanner-probe.css"
+
 // UnknownMethodProbe is a syntactically valid but non-existent HTTP method.
 // Puma answers methods it does not know with a bare "501 Not Implemented" and
 // an empty body before the application is consulted; Rails itself (behind
@@ -56,6 +61,15 @@ func GenericDeepProbePaths() []string {
 		"/406-unsupported-browser.html",
 		"/icon.svg",
 		"/robots.txt",
+		// Framework-owned endpoints and generated files. /cable is Action
+		// Cable's WebSocket endpoint; a plain GET gets its "Page not found".
+		"/cable",
+		"/assets/.manifest.json",
+		"/packs/manifest.json",
+		"/vite/.vite/manifest.json",
+		"/manifest.json",
+		"/service-worker.js",
+		"/__sinatra__/404.png",
 		// Project files that are sometimes left inside the document root. A
 		// readable Gemfile.lock / .ruby-version discloses the Ruby version.
 		"/Gemfile",
@@ -64,13 +78,24 @@ func GenericDeepProbePaths() []string {
 		"/.tool-versions",
 		"/config.ru",
 		"/Rakefile",
+		"/Dockerfile",
+		"/Procfile",
+		"/README.md",
+		"/.rubocop.yml",
+		"/.bundle/config",
+		"/db/schema.rb",
+		"/config/application.rb",
+		"/config/routes.rb",
+		"/config/puma.rb",
 		// Exposed secrets / configuration (read-only GETs; values are never
 		// stored in evidence).
 		"/config/database.yml",
 		"/config/secrets.yml",
 		"/config/master.key",
+		"/config/credentials.yml.enc",
 		"/.env",
 		"/log/development.log",
+		"/log/production.log",
 	}
 }
 
@@ -105,8 +130,10 @@ func hasFramework(d *Detection, name string) bool {
 func ConditionalProbeGroups() []ProbeGroup {
 	return []ProbeGroup{
 		{Name: "rails", Trigger: func(d *Detection) bool { return hasFramework(d, "Rails") },
-			Paths: []string{"/sidekiq", "/admin", "/letter_opener", "/flipper", "/pghero",
-				"/rails/mailers", "/rails/conductor/action_mailbox/inbound_emails", "/packs/manifest.json"}},
+			Paths: []string{"/sidekiq", "/admin/sidekiq", "/admin", "/letter_opener", "/flipper", "/pghero",
+				"/rails/mailers", "/rails/conductor/action_mailbox/inbound_emails",
+				"/good_job", "/jobs", "/blazer", "/resque", "/graphiql", "/apipie",
+				"/rails/view_components", "/lookbook", "/okcomputer", "/rails/db"}},
 		{Name: "gitlab", Trigger: func(d *Detection) bool { return hasFramework(d, "GitLab") },
 			Paths: []string{"/users/sign_in", "/help", "/api/v4/version"}},
 		{Name: "mastodon", Trigger: func(d *Detection) bool { return hasFramework(d, "Mastodon") },

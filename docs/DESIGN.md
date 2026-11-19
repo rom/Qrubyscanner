@@ -186,6 +186,22 @@ always explainable, and each distinct signal is counted once.
   also doubles as the soft-404 baseline that gates behavioural signals on
   catch-all servers.
 
+**Conventions, leaks and bundles**
+- Rails form-helper and view-helper output, pagination gems, attachment URL
+  schemes, Devise and Active Model messages, HTTP-auth failure bodies, the
+  `redirect_to` body (the fetcher keeps a bounded prefix of each redirect
+  hop's body for this).
+- Ruby values rendered by mistake: `#<Class:0x…>`, hash-rocket dumps,
+  `nil:NilClass`. These are skipped on pages that display code samples.
+- Deep mode asks for the not-found path again with `Accept:
+  application/json`, a missing `/assets/` file and `/cable`, reads asset
+  manifests, and fetches up to two referenced JavaScript bundles to look for
+  rails-ujs / Action Cable / Active Storage client code.
+- A **Rails version hint** is derived from generation-specific defaults when
+  no exact version is known. Only lower bounds are taken from header sets,
+  since applications that manage their own headers keep old ones across
+  upgrades. The hint is display-only.
+
 **Negative fingerprints**
 - **Phoenix (Elixir)** mirrors Rails' default `Cache-Control`, secure headers
   and MD5-digested `/assets/` files. It is recognised by its `_<app>_key`

@@ -955,6 +955,7 @@ function renderService(svc, target) {
       kv.appendChild(dd);
     }
     if (!rb.version && rb.branch) add("Ruby branch", rb.branch + ".x (patch level unknown)");
+    if (rb.rails_version_hint) add("Rails version (hint)", rb.rails_version_hint);
     if (rb.rails_env) add("Environment", rb.rails_env);
     if (rb.rails_info_exposed) {
       kv.appendChild(el("dt", null, "Rails info"));
